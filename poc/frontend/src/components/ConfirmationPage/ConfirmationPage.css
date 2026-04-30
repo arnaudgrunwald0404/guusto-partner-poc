@@ -1,0 +1,109 @@
+.confirmation-page {
+  min-height: 100vh;
+  background: #f9fafb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+}
+
+.confirmation-page__card {
+  background: #ffffff;
+  border-radius: 12px;
+  max-width: 480px;
+  width: 100%;
+  padding: 40px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  text-align: center;
+}
+
+.confirmation-page__logo {
+  display: block;
+  margin: 0 auto 32px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #2563eb;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+}
+
+.confirmation-page__icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 16px;
+  line-height: 1;
+}
+
+.confirmation-page__dismiss-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background-color: #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.confirmation-page__dismiss-x {
+  width: 20px;
+  height: 20px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.confirmation-page__dismiss-x::before,
+.confirmation-page__dismiss-x::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 2px;
+  background-color: #6b7280;
+  border-radius: 1px;
+}
+
+.confirmation-page__dismiss-x::before {
+  transform: rotate(45deg);
+}
+
+.confirmation-page__dismiss-x::after {
+  transform: rotate(-45deg);
+}
+
+.confirmation-page__headline {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1a1a2e;
+  margin: 0 0 12px 0;
+  line-height: 1.3;
+}
+
+.confirmation-page__body {
+  font-size: 16px;
+  color: #6b7280;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.confirmation-page__sub {
+  font-size: 14px;
+  color: #9ca3af;
+  margin-top: 16px;
+  line-height: 1.5;
+}
+
+.confirmation-page__link {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.confirmation-page__footer {
+  margin-top: 40px;
+  font-size: 12px;
+  color: #9ca3af;
+  text-align: center;
+}

@@ -1,0 +1,149 @@
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes crossFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.recognition-banner {
+  animation: fadeIn 200ms ease-out;
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.recognition-banner__content {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  animation: crossFade 300ms ease-in-out;
+}
+
+.recognition-banner__icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.recognition-banner__spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: spin 800ms linear infinite;
+  opacity: 0.7;
+}
+
+.recognition-banner__checkmark {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: currentColor;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.recognition-banner__checkmark::after {
+  content: '';
+  width: 8px;
+  height: 5px;
+  border-left: 2px solid white;
+  border-bottom: 2px solid white;
+  transform: rotate(-45deg) translate(1px, -1px);
+  display: block;
+}
+
+.recognition-banner__warning-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.recognition-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.recognition-banner__headline {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin: 0 0 4px 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+}
+
+.recognition-banner__body {
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+}
+
+.recognition-banner__blockquote {
+  margin: 4px 0 0 0;
+  padding: 0;
+  border: none;
+  font-style: italic;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.recognition-banner__sub-body {
+  font-size: 13px;
+  margin: 6px 0 0 0;
+  opacity: 0.8;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+}
+
+.recognition-banner__tag {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background-color: rgba(0, 0, 0, 0.08);
+  white-space: nowrap;
+  cursor: default;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  letter-spacing: 0.02em;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .recognition-banner {
+    flex-wrap: wrap;
+  }
+  .recognition-banner__tag {
+    order: 3;
+    align-self: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .recognition-banner__tag {
+    display: none;
+  }
+}

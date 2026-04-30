@@ -1,0 +1,10 @@
+node_modules/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+dist/
+.env
+.DS_Store
+screenshots/
+capture.js
+capture-product.js

@@ -1,0 +1,949 @@
+/**
+ * RecognizeDrawer — Slide-in panel for manual recognition.
+ *
+ * Three steps:
+ *   1. Compose  — company value selector + visibility toggle + message textarea + live GiftCardPreview
+ *   2. Confirm  — summary card + "Send Recognition & $25 Reward" CTA
+ *   3. Success  — celebration state
+ *
+ * PRD-aligned (Phase 1 R&R):
+ *   - Company values fetched from GET /api/rr/admin/values (admin-configured)
+ *   - Message: 50–500 chars (from tenant config defaults)
+ *   - Visibility: Company-wide | Team only | Private (PRD §6.1)
+ *   - Posts to POST /api/rr/shoutouts (Phase 1 endpoint)
+ *   - Form state preserved on 5xx — no silent data loss
+ *   - Pre-send content self-moderation warning (RR-026)
+ */
+
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { GiftCardPreview } from './GiftCardPreview';
+import type { EmployeeProfile } from '../../data/employees';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type Step = 'compose' | 'confirm' | 'success';
+type DeliveryStatus = 'delivered' | 'failed';
+type Visibility = 'company' | 'team' | 'private';
+
+interface CompanyValue {
+  id: string;
+  label: string;
+  emoji: string;
+}
+
+interface RecognizeDrawerProps {
+  employee: EmployeeProfile;
+  managerFirstName?: string;
+  /** POC mock: the logged-in manager's employee ID, passed as x-user-id header */
+  senderId?: string;
+  onClose: () => void;
+}
+
+const VISIBILITY_OPTIONS: { id: Visibility; label: string; description: string }[] = [
+  { id: 'company',  label: 'Company-wide', description: 'Visible to everyone' },
+  { id: 'team',    label: 'Team only',    description: 'Visible to your team' },
+  { id: 'private', label: 'Private',      description: 'Recipient & admins only' },
+];
+
+const AMOUNT_CENTS = 2500;
+const MSG_MIN = 50;
+const MSG_MAX = 500;
+
+// ---------------------------------------------------------------------------
+// Content moderation patterns (RR-026) — non-blocking self-check
+// ---------------------------------------------------------------------------
+
+const PII_PATTERNS = [
+  /\b\d{3}-\d{2}-\d{4}\b/,            // SSN
+  /\b\d{3}[.\s-]?\d{3}[.\s-]?\d{4}\b/, // phone number
+  /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/, // email address
+];
+
+const PROFANITY_LIST = ['fuck', 'shit', 'asshole', 'bitch', 'damn', 'crap', 'bastard'];
+
+function detectContentWarning(text: string): string | null {
+  const lower = text.toLowerCase();
+  for (const word of PROFANITY_LIST) {
+    if (lower.includes(word)) {
+      return 'Your message may contain language that violates our content policy. Please review before sending.';
+    }
+  }
+  for (const pattern of PII_PATTERNS) {
+    if (pattern.test(text)) {
+      return 'Your message may contain personal information (phone number, email, or SSN). Consider removing it before sharing.';
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Shared style constants
+// ---------------------------------------------------------------------------
+
+const labelStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: 12,
+  fontWeight: 600,
+  color: '#475569',
+  letterSpacing: '0.05em',
+  textTransform: 'uppercase',
+  marginBottom: 6,
+};
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '10px 12px',
+  border: '1px solid #e2e8f0',
+  borderRadius: 8,
+  fontSize: 14,
+  color: '#1e293b',
+  background: '#fff',
+  boxSizing: 'border-box',
+  outline: 'none',
+};
+
+// ---------------------------------------------------------------------------
+// Confetti — pure CSS/JS, no deps
+// ---------------------------------------------------------------------------
+
+function Confetti() {
+  const COLORS = ['#14b8a6', '#3b82f6', '#a855f7', '#ec4899', '#f59e0b', '#22c55e'];
+  const pieces = Array.from({ length: 30 }, (_, i) => ({
+    id: i,
+    color: COLORS[i % COLORS.length],
+    left: `${Math.random() * 100}%`,
+    delay: `${Math.random() * 0.8}s`,
+    size: 6 + Math.random() * 6,
+    rotation: Math.random() * 360,
+  }));
+
+  return (
+    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+      <style>{`
+        @keyframes confettiFall {
+          0%   { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+          100% { transform: translateY(160px) rotate(720deg); opacity: 0; }
+        }
+      `}</style>
+      {pieces.map(p => (
+        <div key={p.id} style={{
+          position: 'absolute',
+          top: 0,
+          left: p.left,
+          width: p.size,
+          height: p.size,
+          background: p.color,
+          borderRadius: 2,
+          transform: `rotate(${p.rotation}deg)`,
+          animation: `confettiFall 1.4s ease-in ${p.delay} forwards`,
+        }} />
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step 1 — Compose
+// ---------------------------------------------------------------------------
+
+interface ComposeStepProps {
+  employee: EmployeeProfile;
+  managerFirstName: string;
+  companyValues: CompanyValue[];
+  valuesLoading: boolean;
+  valueId: string;
+  setValueId: (v: string) => void;
+  message: string;
+  setMessage: (v: string) => void;
+  visibility: Visibility;
+  setVisibility: (v: Visibility) => void;
+  contentWarning: string | null;
+  onNext: () => void;
+}
+
+function ComposeStep({
+  employee,
+  managerFirstName,
+  companyValues,
+  valuesLoading,
+  valueId,
+  setValueId,
+  message,
+  setMessage,
+  visibility,
+  setVisibility,
+  contentWarning,
+  onNext,
+}: ComposeStepProps) {
+  const trimmed = message.trim();
+  const canProceed = valueId !== '' && trimmed.length >= MSG_MIN;
+  const remaining = MSG_MAX - message.length;
+  const charsToMin = Math.max(0, MSG_MIN - trimmed.length);
+
+  const selectedValue = companyValues.find(v => v.id === valueId);
+
+  return (
+    <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0, overflow: 'hidden' }}>
+      {/* Left: form */}
+      <div style={{
+        flex: 1,
+        padding: '24px 24px 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 20,
+        overflowY: 'auto',
+        borderRight: '1px solid #f1f5f9',
+      }}>
+        {/* Recipient */}
+        <div>
+          <label style={labelStyle}>To</label>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 12px',
+            background: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: 8,
+          }}>
+            <div style={{
+              width: 32, height: 32, borderRadius: '50%',
+              background: employee.avatarColor,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 13, fontWeight: 700, color: '#1e293b', flexShrink: 0,
+            }}>
+              {employee.firstName[0]}{employee.lastName[0]}
+            </div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#1e293b' }}>
+                {employee.firstName} {employee.lastName}
+              </div>
+              <div style={{ fontSize: 12, color: '#94a3b8' }}>{employee.email}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Amount badge */}
+        <div>
+          <label style={labelStyle}>Reward amount</label>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            padding: '10px 16px',
+            background: 'linear-gradient(135deg, #0f2044, #1a3a6e)',
+            borderRadius: 8, color: '#fff',
+          }}>
+            <span style={{ fontSize: 22, fontWeight: 800 }}>$25</span>
+            <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>USD · Guusto Gift Card</span>
+            <span style={{
+              marginLeft: 4, fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+              background: 'rgba(255,255,255,0.15)', padding: '2px 8px', borderRadius: 10,
+              color: 'rgba(255,255,255,0.8)',
+            }}>FIXED</span>
+          </div>
+        </div>
+
+        {/* Company value */}
+        <div>
+          <label style={labelStyle}>
+            Company value <span style={{ color: '#ef4444' }}>*</span>
+          </label>
+          <select
+            value={valueId}
+            onChange={e => setValueId(e.target.value)}
+            disabled={valuesLoading}
+            style={{
+              ...inputStyle,
+              color: valueId ? '#1e293b' : '#94a3b8',
+              appearance: 'none',
+              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%2394a3b8' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14L2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E")`,
+              backgroundRepeat: 'no-repeat',
+              backgroundPosition: 'right 12px center',
+              paddingRight: 36,
+              opacity: valuesLoading ? 0.6 : 1,
+            }}
+          >
+            <option value="">{valuesLoading ? 'Loading values…' : 'Select a company value…'}</option>
+            {companyValues.map(v => (
+              <option key={v.id} value={v.id}>{v.emoji} {v.label}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Message */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <label style={{ ...labelStyle, marginBottom: 0 }}>
+              Message <span style={{ color: '#ef4444' }}>*</span>
+            </label>
+            {/* Visibility toggle */}
+            <div style={{ display: 'flex', gap: 2, background: '#f1f5f9', borderRadius: 6, padding: 2 }}>
+              {VISIBILITY_OPTIONS.map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  title={opt.description}
+                  onClick={() => setVisibility(opt.id)}
+                  style={{
+                    padding: '3px 10px',
+                    borderRadius: 4,
+                    border: 'none',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: visibility === opt.id ? '#fff' : 'transparent',
+                    color: visibility === opt.id ? '#1e293b' : '#94a3b8',
+                    boxShadow: visibility === opt.id ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                    transition: 'all 0.1s',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <textarea
+            value={message}
+            onChange={e => setMessage(e.target.value)}
+            maxLength={MSG_MAX}
+            placeholder={`Tell ${employee.firstName} why they're being recognized… (minimum ${MSG_MIN} characters)`}
+            style={{
+              ...inputStyle,
+              flex: 1,
+              minHeight: 140,
+              resize: 'none',
+              fontFamily: 'inherit',
+              lineHeight: 1.6,
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+            <span style={{ fontSize: 11, color: charsToMin > 0 ? '#f59e0b' : '#22c55e' }}>
+              {charsToMin > 0 ? `${charsToMin} more characters needed` : '✓ Minimum reached'}
+            </span>
+            <span style={{ fontSize: 11, color: remaining < 50 ? '#ef4444' : '#94a3b8' }}>
+              {remaining} left
+            </span>
+          </div>
+        </div>
+
+        {/* RR-026: pre-send content warning banner */}
+        {contentWarning && (
+          <div style={{
+            padding: '10px 14px',
+            background: '#fffbeb',
+            border: '1px solid #fde68a',
+            borderRadius: 8,
+            fontSize: 13,
+            color: '#92400e',
+            display: 'flex',
+            gap: 8,
+            alignItems: 'flex-start',
+          }}>
+            <span style={{ flexShrink: 0 }}>⚠️</span>
+            <span>{contentWarning}</span>
+          </div>
+        )}
+
+        {/* Next CTA */}
+        <button
+          onClick={onNext}
+          disabled={!canProceed}
+          style={{
+            padding: '12px 0',
+            background: canProceed ? '#1a56db' : '#e2e8f0',
+            color: canProceed ? '#fff' : '#94a3b8',
+            border: 'none',
+            borderRadius: 8,
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: canProceed ? 'pointer' : 'not-allowed',
+            transition: 'background 0.15s, color 0.15s',
+          }}
+        >
+          Preview & confirm →
+        </button>
+        {!canProceed && (
+          <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', marginTop: -12 }}>
+            {!valueId
+              ? 'Select a company value to continue'
+              : `${charsToMin} more characters needed (min ${MSG_MIN})`}
+          </div>
+        )}
+      </div>
+
+      {/* Right: live preview */}
+      <div style={{
+        width: 300,
+        padding: '24px 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 16,
+        background: '#f8fafc',
+        flexShrink: 0,
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          Live preview
+        </div>
+        <GiftCardPreview
+          employeeFirstName={employee.firstName}
+          managerFirstName={managerFirstName}
+          reason={selectedValue ? `${selectedValue.emoji} ${selectedValue.label}` : ''}
+          message={message}
+          amountCents={AMOUNT_CENTS}
+        />
+        <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', lineHeight: 1.5 }}>
+          This is what {employee.firstName} will receive by email — redeemable at 60,000+ merchants.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step 2 — Confirm
+// ---------------------------------------------------------------------------
+
+interface ConfirmStepProps {
+  employee: EmployeeProfile;
+  managerFirstName: string;
+  valueLabel: string;
+  message: string;
+  visibility: Visibility;
+  isSubmitting: boolean;
+  submitError: string | null;
+  onBack: () => void;
+  onSubmit: () => void;
+}
+
+const VISIBILITY_LABELS: Record<Visibility, string> = {
+  company: '🌐 Company-wide',
+  team:    '👥 Team only',
+  private: '🔒 Private',
+};
+
+function ConfirmStep({
+  employee,
+  managerFirstName,
+  valueLabel,
+  message,
+  visibility,
+  isSubmitting,
+  submitError,
+  onBack,
+  onSubmit,
+}: ConfirmStepProps) {
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '28px 28px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div>
+        <h3 style={{ margin: '0 0 6px', fontSize: 17, fontWeight: 700, color: '#1e293b' }}>
+          Confirm recognition
+        </h3>
+        <p style={{ margin: 0, fontSize: 14, color: '#64748b' }}>
+          Review the details below, then send. {employee.firstName} will receive an email with their gift card.
+        </p>
+      </div>
+
+      {/* Summary card */}
+      <div style={{
+        background: '#fff',
+        border: '1px solid #e2e8f0',
+        borderRadius: 10,
+        overflow: 'hidden',
+      }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>
+            Recipient
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{
+              width: 40, height: 40, borderRadius: '50%',
+              background: employee.avatarColor,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 15, fontWeight: 700, color: '#1e293b',
+            }}>
+              {employee.firstName[0]}{employee.lastName[0]}
+            </div>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#1e293b' }}>
+                {employee.firstName} {employee.lastName}
+              </div>
+              <div style={{ fontSize: 13, color: '#94a3b8' }}>{employee.email}</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+              Company value
+            </div>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              background: '#eff6ff', color: '#1d4ed8', borderRadius: 20,
+              padding: '4px 12px', fontSize: 13, fontWeight: 600,
+            }}>
+              {valueLabel}
+            </span>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+              Visibility
+            </div>
+            <span style={{
+              fontSize: 12, fontWeight: 600, color: '#374151',
+              background: '#f8fafc', padding: '3px 10px', borderRadius: 12,
+              border: '1px solid #e2e8f0',
+            }}>
+              {VISIBILITY_LABELS[visibility]}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+            Message
+          </div>
+          <p style={{ margin: 0, fontSize: 14, color: '#374151', lineHeight: 1.6 }}>
+            {message}
+          </p>
+        </div>
+
+        <div style={{ padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>
+              Reward
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#1e293b' }}>$25 USD</div>
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>Guusto Gift Card · 60,000+ merchants</div>
+          </div>
+          <div style={{ fontSize: 13, color: '#64748b' }}>
+            From: <strong>{managerFirstName}</strong>
+          </div>
+        </div>
+      </div>
+
+      {/* Note */}
+      <div style={{
+        padding: '12px 16px',
+        background: '#f0fdf4',
+        border: '1px solid #bbf7d0',
+        borderRadius: 8,
+        fontSize: 13,
+        color: '#166534',
+        lineHeight: 1.5,
+      }}>
+        💡 No approval needed — as the manager, you're authorizing this recognition directly. The reward will be sent immediately.
+      </div>
+
+      {/* Inline submit error (RR-013: preserve form state on 5xx) */}
+      {submitError && (
+        <div style={{
+          padding: '10px 14px',
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: 8,
+          fontSize: 13,
+          color: '#b91c1c',
+          display: 'flex',
+          gap: 8,
+          alignItems: 'flex-start',
+        }}>
+          <span style={{ flexShrink: 0 }}>❌</span>
+          <span>{submitError}</span>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: 10, marginTop: 'auto' }}>
+        <button
+          onClick={onBack}
+          disabled={isSubmitting}
+          style={{
+            flex: 1,
+            padding: '12px 0',
+            border: '1px solid #e2e8f0',
+            borderRadius: 8,
+            background: '#fff',
+            color: '#374151',
+            fontSize: 14,
+            fontWeight: 500,
+            cursor: isSubmitting ? 'not-allowed' : 'pointer',
+          }}
+        >
+          ← Back
+        </button>
+        <button
+          onClick={onSubmit}
+          disabled={isSubmitting}
+          style={{
+            flex: 2,
+            padding: '12px 0',
+            border: 'none',
+            borderRadius: 8,
+            background: isSubmitting ? '#93c5fd' : '#1a56db',
+            color: '#fff',
+            fontSize: 14,
+            fontWeight: 700,
+            cursor: isSubmitting ? 'not-allowed' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            transition: 'background 0.15s',
+          }}
+        >
+          {isSubmitting ? (
+            <>
+              <span style={{
+                width: 16, height: 16, border: '2px solid rgba(255,255,255,0.4)',
+                borderTopColor: '#fff', borderRadius: '50%',
+                animation: 'spin 0.7s linear infinite',
+                display: 'inline-block',
+              }} />
+              Sending…
+            </>
+          ) : (
+            submitError ? 'Retry →' : 'Send Recognition & $25 Reward 🎁'
+          )}
+        </button>
+      </div>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step 3 — Success
+// ---------------------------------------------------------------------------
+
+interface SuccessStepProps {
+  employee: EmployeeProfile;
+  deliveryStatus: DeliveryStatus;
+  onClose: () => void;
+}
+
+function SuccessStep({ employee, deliveryStatus, onClose }: SuccessStepProps) {
+  const isFailed = deliveryStatus === 'failed';
+
+  return (
+    <div style={{
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '40px 32px',
+      textAlign: 'center',
+      position: 'relative',
+    }}>
+      {!isFailed && <Confetti />}
+
+      <div style={{ fontSize: 64, marginBottom: 20, lineHeight: 1 }}>
+        {isFailed ? '⚠️' : '🎉'}
+      </div>
+
+      <h2 style={{ fontSize: 22, fontWeight: 800, color: '#1e293b', margin: '0 0 10px' }}>
+        {isFailed ? 'Reward delivery failed' : `${employee.firstName} has been recognized!`}
+      </h2>
+
+      <p style={{ fontSize: 15, color: '#64748b', margin: '0 0 24px', lineHeight: 1.6, maxWidth: 320 }}>
+        {isFailed
+          ? `The recognition was recorded, but we couldn't send the Guusto reward. Please contact support.`
+          : `Your recognition was recorded and ${employee.firstName} received a $25 Guusto gift card at ${employee.email}.`}
+      </p>
+
+      <div style={{
+        padding: '12px 20px',
+        background: isFailed ? '#fef2f2' : '#f0fdf4',
+        border: `1px solid ${isFailed ? '#fecaca' : '#bbf7d0'}`,
+        borderRadius: 8,
+        fontSize: 13,
+        color: isFailed ? '#b91c1c' : '#166534',
+        marginBottom: 24,
+        maxWidth: 340,
+      }}>
+        {isFailed
+          ? '❌ Guusto reward could not be delivered. The recognition is still recorded.'
+          : `✅ Recognition posted to the company feed`}
+      </div>
+
+      <button
+        onClick={onClose}
+        style={{
+          padding: '12px 32px',
+          background: '#1a56db',
+          color: '#fff',
+          border: 'none',
+          borderRadius: 8,
+          fontSize: 14,
+          fontWeight: 600,
+          cursor: 'pointer',
+        }}
+      >
+        Done
+      </button>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main drawer
+// ---------------------------------------------------------------------------
+
+export function RecognizeDrawer({
+  employee,
+  managerFirstName = 'Manager',
+  senderId = 'mgr_001',
+  onClose,
+}: RecognizeDrawerProps) {
+  const [step, setStep] = useState<Step>('compose');
+  const [valueId, setValueId] = useState('');
+  const [message, setMessage] = useState('');
+  const [visibility, setVisibility] = useState<Visibility>('company');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [deliveryStatus, setDeliveryStatus] = useState<DeliveryStatus>('delivered');
+
+  // Company values from API
+  const [companyValues, setCompanyValues] = useState<CompanyValue[]>([]);
+  const [valuesLoading, setValuesLoading] = useState(true);
+
+  // Fetch company values on mount
+  useEffect(() => {
+    fetch('http://localhost:3001/api/rr/values')
+      .then(r => r.json())
+      .then((data: { values?: Array<CompanyValue & { is_active?: number }> }) => {
+        if (data.values && data.values.length > 0) {
+          setCompanyValues(data.values.filter(v => v.is_active !== 0));
+        }
+      })
+      .catch(() => {
+        // Fallback to hardcoded defaults if API is unreachable
+        setCompanyValues([
+          { id: 'val_001', label: 'Customer Focus',  emoji: '🤝' },
+          { id: 'val_002', label: 'Innovation',       emoji: '💡' },
+          { id: 'val_003', label: 'Team Player',      emoji: '🏆' },
+          { id: 'val_004', label: 'Above & Beyond',   emoji: '🚀' },
+          { id: 'val_005', label: 'Integrity',        emoji: '🛡️' },
+        ]);
+      })
+      .finally(() => setValuesLoading(false));
+  }, []);
+
+  // Overlay click-outside handler
+  const drawerRef = useRef<HTMLDivElement>(null);
+
+  const handleOverlayClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) onClose();
+  }, [onClose]);
+
+  // Keyboard: Escape closes
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  // Content warning derived from current message text
+  const contentWarning = detectContentWarning(message);
+
+  const selectedValue = companyValues.find(v => v.id === valueId);
+  const valueLabel = selectedValue ? `${selectedValue.emoji} ${selectedValue.label}` : '';
+
+  const handleSubmit = async () => {
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      const res = await fetch('http://localhost:3001/api/rr/shoutouts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': senderId,
+          'x-user-role': 'manager',
+        },
+        body: JSON.stringify({
+          recipientId: employee.id,
+          message: message.trim(),
+          valueIds: [valueId],
+          visibility,
+          giftAmountCents: AMOUNT_CENTS,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error: string };
+        // 4xx: validation error — stay on confirm, show inline message
+        setSubmitError(err.error ?? `Request failed (${res.status}). Please try again.`);
+        return;
+      }
+
+      // Success — shoutout created synchronously
+      setDeliveryStatus('delivered');
+      setStep('success');
+    } catch {
+      // Network error or 5xx — preserve all form state
+      setSubmitError('Network error. Your recognition was not sent — please check your connection and try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const STEP_LABELS: Record<Step, string> = {
+    compose: 'Compose',
+    confirm: 'Confirm',
+    success: 'Sent',
+  };
+
+  const STEP_ORDER: Step[] = ['compose', 'confirm', 'success'];
+
+  return (
+    /* Overlay */
+    <div
+      onClick={handleOverlayClick}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(15, 23, 42, 0.45)',
+        backdropFilter: 'blur(2px)',
+        zIndex: 1000,
+        display: 'flex',
+        justifyContent: 'flex-end',
+      }}
+    >
+      {/* Drawer panel */}
+      <div
+        ref={drawerRef}
+        style={{
+          width: '100%',
+          maxWidth: step === 'compose' ? 740 : 500,
+          height: '100%',
+          background: '#fff',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '-8px 0 40px rgba(0,0,0,0.18)',
+          animation: 'slideIn 0.25s ease-out',
+          transition: 'max-width 0.25s ease',
+        }}
+      >
+        {/* Header */}
+        <div style={{
+          padding: '20px 24px',
+          borderBottom: '1px solid #f1f5f9',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexShrink: 0,
+        }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#1e293b' }}>
+              Recognize {employee.firstName} ✨
+            </h2>
+            {step !== 'success' && (
+              <p style={{ margin: '2px 0 0', fontSize: 13, color: '#94a3b8' }}>
+                {employee.title} · {employee.department}
+              </p>
+            )}
+          </div>
+
+          {/* Step indicators */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            {step !== 'success' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {STEP_ORDER.filter(s => s !== 'success').map((s, i, arr) => (
+                  <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <div style={{
+                        width: 22, height: 22, borderRadius: '50%',
+                        background: s === step ? '#1a56db' : STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(s) ? '#22c55e' : '#e2e8f0',
+                        color: s === step || STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(s) ? '#fff' : '#94a3b8',
+                        fontSize: 11, fontWeight: 700,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        {STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(s) ? '✓' : i + 1}
+                      </div>
+                      <span style={{
+                        fontSize: 12, fontWeight: s === step ? 600 : 400,
+                        color: s === step ? '#1e293b' : '#94a3b8',
+                      }}>
+                        {STEP_LABELS[s]}
+                      </span>
+                    </div>
+                    {i < arr.length - 1 && (
+                      <div style={{ width: 20, height: 1, background: '#e2e8f0' }} />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button
+              onClick={onClose}
+              style={{
+                width: 32, height: 32, borderRadius: '50%',
+                border: '1px solid #e2e8f0',
+                background: '#fff',
+                cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 18, color: '#94a3b8', flexShrink: 0,
+                transition: 'background 0.1s',
+              }}
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
+        {/* Step content */}
+        {step === 'compose' && (
+          <ComposeStep
+            employee={employee}
+            managerFirstName={managerFirstName}
+            companyValues={companyValues}
+            valuesLoading={valuesLoading}
+            valueId={valueId}
+            setValueId={setValueId}
+            message={message}
+            setMessage={setMessage}
+            visibility={visibility}
+            setVisibility={setVisibility}
+            contentWarning={contentWarning}
+            onNext={() => setStep('confirm')}
+          />
+        )}
+        {step === 'confirm' && (
+          <ConfirmStep
+            employee={employee}
+            managerFirstName={managerFirstName}
+            valueLabel={valueLabel}
+            message={message}
+            visibility={visibility}
+            isSubmitting={isSubmitting}
+            submitError={submitError}
+            onBack={() => { setStep('compose'); setSubmitError(null); }}
+            onSubmit={handleSubmit}
+          />
+        )}
+        {step === 'success' && (
+          <SuccessStep
+            employee={employee}
+            deliveryStatus={deliveryStatus}
+            onClose={onClose}
+          />
+        )}
+      </div>
+
+      <style>{`
+        @keyframes slideIn {
+          from { transform: translateX(100%); opacity: 0; }
+          to   { transform: translateX(0);    opacity: 1; }
+        }
+      `}</style>
+    </div>
+  );
+}
