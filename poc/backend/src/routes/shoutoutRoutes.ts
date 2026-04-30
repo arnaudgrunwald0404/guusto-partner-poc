@@ -292,6 +292,66 @@ shoutoutRouter.get('/', (req: Request, res: Response): void => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/rr/shoutouts/public/:id — no-auth public view (frontline mini-page)
+// Must be registered BEFORE /:id to avoid Express matching "public" as an ID.
+// ---------------------------------------------------------------------------
+
+shoutoutRouter.get('/public/:id', (req: Request, res: Response): void => {
+  const db = getDb();
+
+  const s = db.prepare(
+    'SELECT * FROM rr_shoutouts WHERE id = ? AND deleted_at IS NULL'
+  ).get(req.params.id) as any;
+
+  if (!s) {
+    res.status(404).json({ error: 'Recognition not found' });
+    return;
+  }
+
+  // Private shoutouts are never shown on public pages
+  if (s.visibility === 'private') {
+    res.status(403).json({ error: 'This recognition is private' });
+    return;
+  }
+
+  const values = db.prepare(
+    'SELECT value_id as id, value_label as label FROM rr_shoutout_values WHERE shoutout_id = ?'
+  ).all(s.id) as Array<{ id: string; label: string }>;
+
+  const reactions = db.prepare(`
+    SELECT emoji, COUNT(*) as count
+    FROM rr_shoutout_reactions WHERE shoutout_id = ?
+    GROUP BY emoji ORDER BY count DESC
+  `).all(s.id) as Array<{ emoji: string; count: number }>;
+
+  // Look up emoji from company values table
+  const valueIds = values.map(v => v.id);
+  let valuesWithEmoji: Array<{ id: string; label: string; emoji: string }> = [];
+  if (valueIds.length > 0) {
+    const placeholders = valueIds.map(() => '?').join(',');
+    const dbValues = db.prepare(
+      `SELECT id, label, emoji FROM rr_company_values WHERE id IN (${placeholders})`
+    ).all(...valueIds) as Array<{ id: string; label: string; emoji: string }>;
+    const emojiMap = Object.fromEntries(dbValues.map(v => [v.id, v.emoji]));
+    valuesWithEmoji = values.map(v => ({ ...v, emoji: emojiMap[v.id] ?? '⭐' }));
+  }
+
+  res.json({
+    id: s.id,
+    senderName: s.sender_name,
+    recipientId: s.recipient_id,
+    recipientName: s.recipient_name,
+    message: s.message,
+    visibility: s.visibility,
+    giftAmountCents: s.gift_amount_cents,
+    giftStatus: s.gift_status,
+    values: valuesWithEmoji,
+    reactions,
+    createdAt: s.created_at,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/rr/shoutouts/:id — single shoutout detail
 // ---------------------------------------------------------------------------
 

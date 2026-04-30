@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { icon: '🤝', label: '1:1s', path: '#' },
   { icon: '📢', label: 'Recognition', path: '#' },
   { icon: '📊', label: 'Reports', path: '#' },
+  { icon: '⚙️', label: 'R&R Admin', path: '/admin/rr' },
 ];
 
 interface CCLayoutProps {

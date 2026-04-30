@@ -51,6 +51,7 @@ import { adminRouter } from './routes/adminRoutes.js';
 import { managerRouter } from './routes/managerRoutes.js';
 import { employeeProfileRouter } from './routes/employeeProfileRoutes.js';
 import { recipientRouter } from './routes/recipientRoutes.js';
+import { aiRouter } from './routes/aiRoutes.js';
 
 const app = express();
 const PORT = parseInt(process.env['PORT'] ?? '3001', 10);
@@ -135,6 +136,7 @@ app.post('/api/rr/replay-pending', async (_req, res) => {
 
 app.use('/api/rr/shoutouts', shoutoutRouter);
 app.use('/api/rr/recipients', recipientRouter);
+app.use('/api/rr/ai', aiRouter);
 app.use('/api/rr/manager', managerRouter);
 app.use('/api/rr/employees', employeeProfileRouter);
 app.use('/api/rr/admin', adminRouter);

@@ -161,6 +161,8 @@ interface ComposeStepProps {
   setVisibility: (v: Visibility) => void;
   contentWarning: string | null;
   onNext: () => void;
+  onAiDraft: () => void;
+  aiDrafting: boolean;
 }
 
 function ComposeStep({
@@ -176,6 +178,8 @@ function ComposeStep({
   setVisibility,
   contentWarning,
   onNext,
+  onAiDraft,
+  aiDrafting,
 }: ComposeStepProps) {
   const trimmed = message.trim();
   const canProceed = valueId !== '' && trimmed.length >= MSG_MIN;
@@ -267,6 +271,47 @@ function ComposeStep({
               <option key={v.id} value={v.id}>{v.emoji} {v.label}</option>
             ))}
           </select>
+        </div>
+
+        {/* AI draft assist button (RR-014) */}
+        <div>
+          <button
+            type="button"
+            onClick={onAiDraft}
+            disabled={!valueId || aiDrafting}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              padding: '8px 14px',
+              border: '1px solid #a5b4fc',
+              borderRadius: 8,
+              background: aiDrafting ? '#f0f4ff' : 'linear-gradient(135deg, #eff6ff, #f5f3ff)',
+              color: (!valueId || aiDrafting) ? '#94a3b8' : '#4f46e5',
+              fontSize: 13, fontWeight: 600,
+              cursor: (!valueId || aiDrafting) ? 'not-allowed' : 'pointer',
+              transition: 'all 0.15s',
+              width: '100%',
+              justifyContent: 'center',
+            }}
+          >
+            {aiDrafting ? (
+              <>
+                <span style={{
+                  width: 14, height: 14, border: '2px solid #a5b4fc',
+                  borderTopColor: '#4f46e5', borderRadius: '50%',
+                  animation: 'spin 0.7s linear infinite',
+                  display: 'inline-block',
+                }} />
+                Drafting with AI…
+              </>
+            ) : (
+              <>✨ Draft with AI</>
+            )}
+          </button>
+          {!valueId && (
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 5, textAlign: 'center' }}>
+              Select a company value first to enable AI drafting
+            </div>
+          )}
         </div>
 
         {/* Message */}
@@ -620,11 +665,29 @@ function ConfirmStep({
 interface SuccessStepProps {
   employee: EmployeeProfile;
   deliveryStatus: DeliveryStatus;
+  shoutoutId: string | null;
   onClose: () => void;
 }
 
-function SuccessStep({ employee, deliveryStatus, onClose }: SuccessStepProps) {
+function SuccessStep({ employee, deliveryStatus, shoutoutId, onClose }: SuccessStepProps) {
   const isFailed = deliveryStatus === 'failed';
+  const [copied, setCopied] = React.useState(false);
+
+  const publicUrl = shoutoutId
+    ? `${window.location.origin}/r/${shoutoutId}`
+    : null;
+
+  const qrUrl = publicUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(publicUrl)}&bgcolor=ffffff&color=1e293b&margin=2`
+    : null;
+
+  function handleCopy() {
+    if (!publicUrl) return;
+    navigator.clipboard.writeText(publicUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
 
   return (
     <div style={{
@@ -632,14 +695,14 @@ function SuccessStep({ employee, deliveryStatus, onClose }: SuccessStepProps) {
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      justifyContent: 'center',
+      overflowY: 'auto',
       padding: '40px 32px',
       textAlign: 'center',
       position: 'relative',
     }}>
       {!isFailed && <Confetti />}
 
-      <div style={{ fontSize: 64, marginBottom: 20, lineHeight: 1 }}>
+      <div style={{ fontSize: 64, marginBottom: 16, lineHeight: 1 }}>
         {isFailed ? '⚠️' : '🎉'}
       </div>
 
@@ -647,38 +710,96 @@ function SuccessStep({ employee, deliveryStatus, onClose }: SuccessStepProps) {
         {isFailed ? 'Reward delivery failed' : `${employee.firstName} has been recognized!`}
       </h2>
 
-      <p style={{ fontSize: 15, color: '#64748b', margin: '0 0 24px', lineHeight: 1.6, maxWidth: 320 }}>
+      <p style={{ fontSize: 15, color: '#64748b', margin: '0 0 20px', lineHeight: 1.6, maxWidth: 320 }}>
         {isFailed
           ? `The recognition was recorded, but we couldn't send the Guusto reward. Please contact support.`
-          : `Your recognition was recorded and ${employee.firstName} received a $25 Guusto gift card at ${employee.email}.`}
+          : employee.isFrontline
+            ? `Recognition recorded! Share this link with ${employee.firstName} — no app or login needed.`
+            : `Recognition recorded and posted to the company feed. ${employee.firstName} will be notified.`}
       </p>
 
       <div style={{
-        padding: '12px 20px',
+        padding: '10px 20px',
         background: isFailed ? '#fef2f2' : '#f0fdf4',
         border: `1px solid ${isFailed ? '#fecaca' : '#bbf7d0'}`,
-        borderRadius: 8,
-        fontSize: 13,
+        borderRadius: 8, fontSize: 13,
         color: isFailed ? '#b91c1c' : '#166534',
-        marginBottom: 24,
-        maxWidth: 340,
+        marginBottom: 24, maxWidth: 340,
       }}>
         {isFailed
           ? '❌ Guusto reward could not be delivered. The recognition is still recorded.'
-          : `✅ Recognition posted to the company feed`}
+          : '✅ Recognition posted to the company feed'}
       </div>
+
+      {/* Frontline share section — QR code + link */}
+      {!isFailed && shoutoutId && (
+        <div style={{
+          width: '100%', maxWidth: 360,
+          background: '#f8fafc', border: '1px solid #e2e8f0',
+          borderRadius: 12, padding: '20px 24px', marginBottom: 20,
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 14 }}>
+            {employee.isFrontline ? '📱 Share with frontline employee' : '🔗 Recognition link'}
+          </div>
+
+          {/* QR code */}
+          {qrUrl && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 14 }}>
+              <div style={{
+                padding: 8, background: '#fff',
+                borderRadius: 10, border: '1px solid #e2e8f0',
+                marginBottom: 8, display: 'inline-block',
+              }}>
+                <img
+                  src={qrUrl}
+                  alt="QR code for recognition"
+                  width={160} height={160}
+                  style={{ display: 'block', borderRadius: 6 }}
+                />
+              </div>
+              <div style={{ fontSize: 12, color: '#94a3b8' }}>Scan to view recognition</div>
+            </div>
+          )}
+
+          {/* Copy link row */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{
+              flex: 1, padding: '8px 12px',
+              background: '#fff', border: '1px solid #e2e8f0',
+              borderRadius: 8, fontSize: 12, color: '#64748b',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {publicUrl}
+            </div>
+            <button
+              onClick={handleCopy}
+              style={{
+                padding: '8px 14px', borderRadius: 8, border: 'none',
+                background: copied ? '#059669' : '#1a56db',
+                color: '#fff', fontSize: 12, fontWeight: 600,
+                cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap',
+              }}
+            >
+              {copied ? '✓' : '🔗 Copy'}
+            </button>
+          </div>
+
+          {employee.isFrontline && (
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 10, lineHeight: 1.5 }}>
+              Send this link to {employee.firstName} by text, print it, or show the QR code.
+              No login required.
+            </div>
+          )}
+        </div>
+      )}
 
       <button
         onClick={onClose}
         style={{
           padding: '12px 32px',
-          background: '#1a56db',
-          color: '#fff',
-          border: 'none',
-          borderRadius: 8,
-          fontSize: 14,
-          fontWeight: 600,
-          cursor: 'pointer',
+          background: '#1a56db', color: '#fff',
+          border: 'none', borderRadius: 8,
+          fontSize: 14, fontWeight: 600, cursor: 'pointer',
         }}
       >
         Done
@@ -706,6 +827,8 @@ export function RecognizeDrawer({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [deliveryStatus, setDeliveryStatus] = useState<DeliveryStatus>('delivered');
+  const [shoutoutId, setShoutoutId] = useState<string | null>(null);
+  const [aiDrafting, setAiDrafting] = useState(false);
 
   // Company values from API
   const [companyValues, setCompanyValues] = useState<CompanyValue[]>([]);
@@ -755,6 +878,27 @@ export function RecognizeDrawer({
   const selectedValue = companyValues.find(v => v.id === valueId);
   const valueLabel = selectedValue ? `${selectedValue.emoji} ${selectedValue.label}` : '';
 
+  // AI draft handler (RR-014)
+  const handleAiDraft = async () => {
+    if (!valueId || aiDrafting) return;
+    setAiDrafting(true);
+    try {
+      const res = await fetch('http://localhost:3001/api/rr/ai/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientName: `${employee.firstName} ${employee.lastName}`,
+          valueLabel: selectedValue ? selectedValue.label : '',
+        }),
+      });
+      if (res.ok) {
+        const d = await res.json() as { draft: string };
+        setMessage(d.draft);
+      }
+    } catch {/* silent — user can still write manually */}
+    finally { setAiDrafting(false); }
+  };
+
   const handleSubmit = async () => {
     setIsSubmitting(true);
     setSubmitError(null);
@@ -782,7 +926,9 @@ export function RecognizeDrawer({
         return;
       }
 
-      // Success — shoutout created synchronously
+      // Capture shoutoutId for QR code / share link
+      const data = await res.json() as { shoutoutId: string };
+      setShoutoutId(data.shoutoutId ?? null);
       setDeliveryStatus('delivered');
       setStep('success');
     } catch {
@@ -914,6 +1060,8 @@ export function RecognizeDrawer({
             setVisibility={setVisibility}
             contentWarning={contentWarning}
             onNext={() => setStep('confirm')}
+            onAiDraft={handleAiDraft}
+            aiDrafting={aiDrafting}
           />
         )}
         {step === 'confirm' && (
@@ -933,6 +1081,7 @@ export function RecognizeDrawer({
           <SuccessStep
             employee={employee}
             deliveryStatus={deliveryStatus}
+            shoutoutId={shoutoutId}
             onClose={onClose}
           />
         )}

@@ -15,21 +15,27 @@ import { DashboardPage } from './pages/DashboardPage';
 import { EmployeesListPage } from './pages/EmployeesListPage';
 import { EmployeeProfilePage } from './pages/EmployeeProfilePage';
 import { ManagerDashboardPage } from './pages/ManagerDashboardPage';
+import { AdminPage } from './pages/AdminPage';
 import { StorybookPage } from './pages/StorybookPage';
 import { SSOTestPage } from './pages/SSOTestPage';
+import { FrontlinePage } from './pages/FrontlinePage';
+import { RecognitionDetailPage } from './pages/RecognitionDetailPage';
 
 export function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Storybook lives outside the CC chrome */}
+        {/* Public pages — no auth, no CC chrome */}
         <Route path="/storybook" element={<StorybookPage />} />
+        <Route path="/r/:id" element={<FrontlinePage />} />
 
         {/* All main pages share the CC layout shell */}
         <Route path="/" element={<CCLayout><DashboardPage /></CCLayout>} />
         <Route path="/employees" element={<CCLayout><EmployeesListPage /></CCLayout>} />
         <Route path="/employee/:id" element={<CCLayout><EmployeeProfilePage /></CCLayout>} />
         <Route path="/manager" element={<CCLayout><ManagerDashboardPage /></CCLayout>} />
+        <Route path="/admin/rr" element={<CCLayout><AdminPage /></CCLayout>} />
+        <Route path="/recognition/:id" element={<CCLayout><RecognitionDetailPage /></CCLayout>} />
         <Route path="/sso-test" element={<SSOTestPage />} />
 
         {/* Catch-all */}

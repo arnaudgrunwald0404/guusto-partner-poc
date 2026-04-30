@@ -18,6 +18,10 @@ export interface EmployeeProfile {
   avatarColor: string; // background for initials avatar
   bio: string;
   goals: { title: string; progress: number; due: string }[];
+  /** Frontline employees don't have corporate email / desk; recognition delivered via QR / SMS */
+  isFrontline?: boolean;
+  personalEmail?: string;
+  personalPhone?: string;
 }
 
 export const EMPLOYEES: EmployeeProfile[] = [
@@ -79,6 +83,29 @@ export const EMPLOYEES: EmployeeProfile[] = [
       { title: 'Expand 5 accounts to additional modules', progress: 40, due: 'Q3 2026' },
     ],
   },
+  // Frontline employee — no corporate email, no desk; recognition delivered via personal QR / SMS
+  {
+    id: 'emp_004',
+    firstName: 'Carmen',
+    lastName: 'Rodriguez',
+    title: 'Retail Associate',
+    department: 'Retail – Chicago West',
+    email: 'carmen.rodriguez@clearcompany-retail.com',
+    managerId: 'mgr_003',
+    managerName: 'Luis Morales',
+    managerTitle: 'Store Manager',
+    location: 'Chicago, IL',
+    startDate: '2024-02-12',
+    avatarColor: '#fce7f3',
+    bio: 'Carmen is one of our top-performing retail associates, consistently exceeding monthly sales targets and receiving excellent customer feedback. She mentors new hires and volunteers for every closing shift.',
+    goals: [
+      { title: 'Achieve top-tier NPS score for Q2', progress: 83, due: 'Jun 2026' },
+      { title: 'Complete product knowledge certification', progress: 55, due: 'May 2026' },
+    ],
+    isFrontline: true,
+    personalEmail: 'carmen.r.personal@gmail.com',
+    personalPhone: '+1-312-555-0194',
+  },
 ];
 
 export function getEmployee(id: string): EmployeeProfile | undefined {
@@ -116,6 +143,27 @@ export interface ManagerProfile {
   budgetWeeksRemaining: number;
   directReports: DirectReport[];
 }
+
+// Luis Morales — store manager with Carmen as direct report (frontline demo)
+export const FRONTLINE_MANAGER: ManagerProfile = {
+  id: 'mgr_003',
+  firstName: 'Luis',
+  lastName: 'Morales',
+  title: 'Store Manager',
+  avatarColor: '#d1fae5',
+  budgetAllocatedCents: 20000,
+  budgetSpentCents: 0,
+  budgetPeriodLabel: 'Q2 2026',
+  budgetWeeksRemaining: 6,
+  directReports: [
+    {
+      ...EMPLOYEES[3], // Carmen Rodriguez
+      lastRecognizedDaysAgo: null, // never recognized
+      recognitionsThisQuarter: 0,
+      recognitionHistory: [],
+    },
+  ],
+};
 
 export const MANAGER: ManagerProfile = {
   id: 'mgr_001',

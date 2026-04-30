@@ -8,13 +8,15 @@
  * - Recognition tab: shows recognition history with quote cards
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { RecognitionBanner } from '../components/RecognitionBanner/RecognitionBanner';
 import { RecognizeDrawer } from '../components/RecognizeDrawer/RecognizeDrawer';
 import { GiftRedemptionPanel } from '../components/GiftRedemption/GiftRedemptionPanel';
-import { useRecognitionStatus } from '../hooks/useRecognitionStatus';
 import { getEmployee, type EmployeeProfile } from '../data/employees';
+
+const API = 'http://localhost:3001';
+const VIEWER_HEADERS = { 'x-user-id': 'admin-1', 'x-user-role': 'hr_admin' };
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -83,95 +85,171 @@ const TABS: { id: Tab; label: string }[] = [
 // Tab content panels
 // ---------------------------------------------------------------------------
 
-function RecognitionPanel({ employee }: { employee: EmployeeProfile }) {
-  const { data } = useRecognitionStatus(employee.id);
+// ---------------------------------------------------------------------------
+// Live recognition feed for the employee profile
+// ---------------------------------------------------------------------------
 
-  const hasActiveRecognition = data && data.status !== null;
+interface ShoutoutItem {
+  id: string;
+  senderName: string;
+  recipientName: string;
+  message: string;
+  visibility: string;
+  giftAmountCents: number | null;
+  giftStatus: string | null;
+  values: Array<{ id: string; label: string }>;
+  reactions: Array<{ emoji: string; count: number }>;
+  createdAt: string;
+}
+
+function timeAgo(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function RecognitionPanel({ employee }: { employee: EmployeeProfile }) {
+  const [shoutouts, setShoutouts] = useState<ShoutoutItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API}/api/rr/shoutouts?recipientId=${employee.id}&limit=20`, { headers: VIEWER_HEADERS })
+      .then(r => r.json())
+      .then((d: { items?: ShoutoutItem[] }) => {
+        setShoutouts(d.items ?? []);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [employee.id]);
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '32px 0', color: '#94a3b8' }}>
+        <div style={{
+          width: 28, height: 28, border: '2px solid #e5e7eb', borderTopColor: '#1a56db',
+          borderRadius: '50%', animation: 'spin 0.7s linear infinite',
+          margin: '0 auto 8px',
+        }} />
+        Loading recognition history…
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  if (shoutouts.length === 0) {
+    return (
+      <div style={{
+        textAlign: 'center', padding: '48px 20px',
+        background: '#f9fafb', borderRadius: 10,
+        border: '1px dashed #e5e7eb',
+      }}>
+        <div style={{ fontSize: 36, marginBottom: 12 }}>🌟</div>
+        <div style={{ fontSize: 15, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
+          No recognitions yet
+        </div>
+        <div style={{ fontSize: 14, color: '#9ca3af' }}>
+          When {employee.firstName} receives recognition, it'll appear here.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
-      {/* Active recognition card */}
-      {hasActiveRecognition && data.status === 'delivered' && (
-        <div style={{
-          background: '#f0fdf4',
-          border: '1px solid #bbf7d0',
-          borderRadius: 10,
-          padding: 20,
-          marginBottom: 24,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-            <div>
-              <span style={{
-                fontSize: 11, fontWeight: 600, color: '#059669', letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-              }}>🎉 Recent recognition</span>
-              <h3 style={{ margin: '4px 0 0', fontSize: 16, fontWeight: 700, color: '#1e293b' }}>
-                Exceptional customer feedback
-              </h3>
-            </div>
-            <div style={{
-              background: '#dcfce7', border: '1px solid #86efac', borderRadius: 20,
-              padding: '4px 12px', fontSize: 12, fontWeight: 600, color: '#166534',
-            }}>
-              $25 reward sent
-            </div>
-          </div>
-          <blockquote style={{
-            margin: '0 0 12px',
-            padding: '12px 16px',
+      <div style={{ fontSize: 14, fontWeight: 600, color: '#374151', marginBottom: 16 }}>
+        Recognition history · {shoutouts.length} total
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {shoutouts.map(s => (
+          <div key={s.id} style={{
             background: '#fff',
-            borderLeft: '3px solid #22c55e',
-            borderRadius: '0 6px 6px 0',
-            fontStyle: 'italic',
-            color: '#374151',
-            fontSize: 14,
-            lineHeight: 1.6,
+            border: '1px solid #e5e7eb',
+            borderRadius: 10,
+            overflow: 'hidden',
           }}>
-            "{data.evidence_quote}"
-          </blockquote>
-          <div style={{ fontSize: 12, color: '#6b7280' }}>
-            Recognized by {data.manager_first_name} · AI-detected from a Gong call · {new Date().toLocaleDateString()}
-          </div>
-        </div>
-      )}
-
-      {/* Placeholder history */}
-      <div style={{ marginBottom: 16 }}>
-        <h3 style={{ fontSize: 15, fontWeight: 600, color: '#374151', marginBottom: 12 }}>
-          Recognition history
-        </h3>
-        {!hasActiveRecognition || data.status !== 'delivered' ? (
-          <div style={{
-            textAlign: 'center', padding: '40px 20px',
-            background: '#f9fafb', borderRadius: 8,
-            border: '1px dashed #e5e7eb', color: '#9ca3af', fontSize: 14,
-          }}>
-            No recognitions yet. They'll appear here when a manager approves one.
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {/* Current recognition echoed as a history item */}
+            {/* Top bar */}
             <div style={{
-              background: '#fff', border: '1px solid #e5e7eb',
-              borderRadius: 8, padding: '14px 16px',
-              display: 'flex', alignItems: 'center', gap: 12,
-            }}>
-              <span style={{ fontSize: 20 }}>🎁</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 500, color: '#1e293b' }}>
-                  Customer praise — $25 Guusto reward
+              height: 3,
+              background: 'linear-gradient(90deg, #1a56db, #7c3aed)',
+            }} />
+            <div style={{ padding: '16px 18px' }}>
+              {/* Header row */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, color: '#6b7280' }}>
+                    From <strong style={{ color: '#1e293b' }}>{s.senderName}</strong>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>{timeAgo(s.createdAt)}</div>
                 </div>
-                <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
-                  Approved by {data.manager_first_name} · {new Date().toLocaleDateString()}
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  {s.giftAmountCents && (
+                    <span style={{
+                      background: '#f0fdf4', border: '1px solid #bbf7d0',
+                      borderRadius: 20, padding: '3px 10px',
+                      fontSize: 12, fontWeight: 700, color: '#166534',
+                    }}>
+                      🎁 ${(s.giftAmountCents / 100).toFixed(0)}
+                    </span>
+                  )}
+                  <Link to={`/recognition/${s.id}`} style={{
+                    fontSize: 11, color: '#94a3b8', textDecoration: 'none',
+                    border: '1px solid #e5e7eb', borderRadius: 10, padding: '2px 8px',
+                  }}>
+                    view →
+                  </Link>
                 </div>
               </div>
-              <span style={{
-                fontSize: 11, padding: '2px 10px', borderRadius: 10,
-                background: '#dcfce7', color: '#166534', fontWeight: 600,
-              }}>Delivered</span>
+
+              {/* Values */}
+              {s.values.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
+                  {s.values.map(v => (
+                    <span key={v.id} style={{
+                      background: '#eff6ff', border: '1px solid #bfdbfe',
+                      borderRadius: 20, padding: '2px 9px',
+                      fontSize: 11, fontWeight: 600, color: '#1e40af',
+                    }}>
+                      {v.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Message */}
+              <p style={{
+                margin: 0,
+                padding: '10px 14px',
+                background: '#f8fafc',
+                borderLeft: '3px solid #1a56db',
+                borderRadius: '0 6px 6px 0',
+                fontSize: 14, lineHeight: 1.6, color: '#374151',
+                fontStyle: 'italic',
+              }}>
+                "{s.message}"
+              </p>
+
+              {/* Reactions display */}
+              {s.reactions.length > 0 && (
+                <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+                  {s.reactions.map(r => (
+                    <span key={r.emoji} style={{
+                      display: 'flex', alignItems: 'center', gap: 3,
+                      padding: '2px 8px', borderRadius: 12,
+                      background: '#f3f4f6', border: '1px solid #e5e7eb',
+                      fontSize: 13, color: '#374151',
+                    }}>
+                      {r.emoji} <span style={{ fontSize: 11, fontWeight: 600 }}>{r.count}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-        )}
+        ))}
       </div>
     </div>
   );
@@ -285,6 +363,16 @@ export function EmployeeProfilePage() {
                 <span>📍 {employee.location}</span>
                 <span>📅 {tenure}yr tenure</span>
                 <span>👤 Reports to {employee.managerName}</span>
+                {employee.isFrontline && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    background: '#fef3c7', border: '1px solid #fde68a',
+                    borderRadius: 12, padding: '2px 10px',
+                    fontSize: 11, fontWeight: 700, color: '#92400e',
+                  }}>
+                    📱 Frontline
+                  </span>
+                )}
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>

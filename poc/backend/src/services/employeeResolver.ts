@@ -25,7 +25,17 @@ import { Employee, ResolverResult } from '../types.js';
 // [ASSUMED] Replace this with a real DB query in production.
 // ---------------------------------------------------------------------------
 
-export const STUB_EMPLOYEES: Employee[] = [
+// Extended employee with optional frontline delivery fields
+export interface FrontlineEmployee extends Employee {
+  isFrontline?: boolean;
+  personalEmail?: string;
+  personalPhone?: string;
+  title?: string;
+  department?: string;
+  location?: string;
+}
+
+export const STUB_EMPLOYEES: FrontlineEmployee[] = [
   {
     id: 'emp_001',
     firstName: 'John',
@@ -34,6 +44,9 @@ export const STUB_EMPLOYEES: Employee[] = [
     managerId: 'mgr_001',
     managerEmail: 'manager@demo.com',
     managerFirstName: 'Sarah',
+    title: 'Senior Support Engineer',
+    department: 'Customer Success',
+    location: 'San Francisco, CA',
   },
   {
     id: 'emp_002',
@@ -43,6 +56,9 @@ export const STUB_EMPLOYEES: Employee[] = [
     managerId: 'mgr_001',
     managerEmail: 'manager@demo.com',
     managerFirstName: 'Sarah',
+    title: 'Implementation Specialist',
+    department: 'Customer Success',
+    location: 'Austin, TX',
   },
   {
     id: 'emp_003',
@@ -52,6 +68,25 @@ export const STUB_EMPLOYEES: Employee[] = [
     managerId: 'mgr_002',
     managerEmail: 'manager2@demo.com',
     managerFirstName: 'David',
+    title: 'Customer Success Manager',
+    department: 'Enterprise CS',
+    location: 'New York, NY',
+  },
+  // Frontline employee — no corporate email, delivery via personal channel
+  {
+    id: 'emp_004',
+    firstName: 'Carmen',
+    lastName: 'Rodriguez',
+    email: 'carmen.rodriguez@clearcompany-retail.com',
+    managerId: 'mgr_003',
+    managerEmail: 'store.manager@clearcompany-retail.com',
+    managerFirstName: 'Luis',
+    title: 'Retail Associate',
+    department: 'Retail – Chicago West',
+    location: 'Chicago, IL',
+    isFrontline: true,
+    personalEmail: 'carmen.r.personal@gmail.com',
+    personalPhone: '+1-312-555-0194',
   },
   // Managers are also in the directory so they can send shoutouts
   {
@@ -62,6 +97,8 @@ export const STUB_EMPLOYEES: Employee[] = [
     managerId: 'exec_001',
     managerEmail: 'exec@demo.com',
     managerFirstName: 'CEO',
+    title: 'VP Customer Success',
+    department: 'Customer Success',
   },
   {
     id: 'mgr_002',
@@ -71,6 +108,19 @@ export const STUB_EMPLOYEES: Employee[] = [
     managerId: 'exec_001',
     managerEmail: 'exec@demo.com',
     managerFirstName: 'CEO',
+    title: 'Director of Enterprise CS',
+    department: 'Enterprise CS',
+  },
+  {
+    id: 'mgr_003',
+    firstName: 'Luis',
+    lastName: 'Morales',
+    email: 'store.manager@clearcompany-retail.com',
+    managerId: 'exec_001',
+    managerEmail: 'exec@demo.com',
+    managerFirstName: 'CEO',
+    title: 'Store Manager',
+    department: 'Retail – Chicago West',
   },
 ];
 

@@ -11,6 +11,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { EMPLOYEES } from '../data/employees';
 
+const ALLOWED_REACTIONS = ['👏', '⭐', '🙌', '🔥', '❤️', '🚀'];
+
 const API = 'http://localhost:3001';
 const ADMIN_HEADERS = { 'x-user-id': 'admin-1', 'x-user-role': 'hr_admin' };
 const POLL_MS = 30_000;
@@ -23,10 +25,12 @@ interface FeedItem {
   id: string;
   senderName: string;
   recipientName: string;
+  recipientId: string;
   message: string;
   values: Array<{ id: string; label: string }>;
   giftAmountCents: number | null;
   giftStatus: string | null;
+  reactions: Array<{ emoji: string; count: number }>;
   createdAt: string;
 }
 
@@ -144,40 +148,157 @@ function ValuesChart() {
 
 function FeedCard({ item }: { item: FeedItem }) {
   const color = avatarColor(item.senderName);
+  const [reactions, setReactions] = useState(item.reactions ?? []);
+  const [myReactions, setMyReactions] = useState<Set<string>>(new Set());
+  const [pendingEmoji, setPendingEmoji] = useState<string | null>(null);
+  const [showReact, setShowReact] = useState(false);
+
+  const totalReactions = reactions.reduce((s, r) => s + r.count, 0);
+
+  async function handleReaction(emoji: string) {
+    if (pendingEmoji) return;
+    setPendingEmoji(emoji);
+    setShowReact(false);
+
+    const alreadyReacted = myReactions.has(emoji);
+    setMyReactions(prev => {
+      const next = new Set(prev);
+      if (alreadyReacted) next.delete(emoji); else next.add(emoji);
+      return next;
+    });
+    setReactions(prev => {
+      if (alreadyReacted) {
+        return prev.map(r => r.emoji === emoji ? { ...r, count: Math.max(0, r.count - 1) } : r)
+          .filter(r => r.count > 0);
+      }
+      const existing = prev.find(r => r.emoji === emoji);
+      if (existing) return prev.map(r => r.emoji === emoji ? { ...r, count: r.count + 1 } : r);
+      return [...prev, { emoji, count: 1 }];
+    });
+
+    try {
+      const res = await fetch(`${API}/api/rr/shoutouts/${item.id}/reactions`, {
+        method: 'POST',
+        headers: { ...ADMIN_HEADERS, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emoji }),
+      });
+      if (res.ok) {
+        const d = await res.json() as { reactions: Array<{ emoji: string; count: number }> };
+        setReactions(d.reactions);
+      }
+    } catch {/* optimistic stays */}
+    finally { setPendingEmoji(null); }
+  }
+
   return (
     <div style={{
       padding: '14px 20px', borderBottom: '1px solid #f3f4f6',
-      display: 'flex', gap: 12, alignItems: 'flex-start',
     }}>
-      <div style={{
-        width: 36, height: 36, borderRadius: '50%', background: color, flexShrink: 0,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 12, fontWeight: 700, color: '#1e293b',
-      }}>
-        {initials(item.senderName)}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.4 }}>
-          <strong style={{ color: '#1e293b' }}>{item.senderName}</strong>
-          {' recognized '}
-          <strong style={{ color: '#1e293b' }}>{item.recipientName}</strong>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+        <div style={{
+          width: 36, height: 36, borderRadius: '50%', background: color, flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 12, fontWeight: 700, color: '#1e293b',
+        }}>
+          {initials(item.senderName)}
         </div>
-        {item.values.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5 }}>
-            {item.values.map(v => (
-              <span key={v.id} style={{
-                background: '#eff6ff', border: '1px solid #bfdbfe',
-                borderRadius: 20, padding: '2px 8px', fontSize: 11, fontWeight: 600, color: '#1e40af',
-              }}>{v.label}</span>
-            ))}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.4 }}>
+            <strong style={{ color: '#1e293b' }}>{item.senderName}</strong>
+            {' recognized '}
+            <Link to={`/employee/${item.recipientId}`} style={{ color: '#1e293b', fontWeight: 700, textDecoration: 'none' }}>
+              {item.recipientName}
+            </Link>
           </div>
-        )}
-        <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span>{timeAgo(item.createdAt)}</span>
-          {item.giftAmountCents && (
-            <span style={{ color: '#059669', fontWeight: 600 }}>
-              🎁 ${(item.giftAmountCents / 100).toFixed(0)} gift
-            </span>
+          {item.values.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5 }}>
+              {item.values.map(v => (
+                <span key={v.id} style={{
+                  background: '#eff6ff', border: '1px solid #bfdbfe',
+                  borderRadius: 20, padding: '2px 8px', fontSize: 11, fontWeight: 600, color: '#1e40af',
+                }}>{v.label}</span>
+              ))}
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4, display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span>{timeAgo(item.createdAt)}</span>
+            {item.giftAmountCents && (
+              <span style={{ color: '#059669', fontWeight: 600 }}>
+                🎁 ${(item.giftAmountCents / 100).toFixed(0)} gift
+              </span>
+            )}
+            <Link to={`/recognition/${item.id}`} style={{ color: '#94a3b8', textDecoration: 'none', marginLeft: 'auto' }}>
+              view →
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* Reactions row */}
+      <div style={{ marginTop: 10, marginLeft: 48, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        {/* Existing reaction counts */}
+        {reactions.map(r => (
+          <button
+            key={r.emoji}
+            onClick={() => handleReaction(r.emoji)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 3,
+              padding: '3px 8px', borderRadius: 12,
+              border: myReactions.has(r.emoji) ? '1px solid #93c5fd' : '1px solid #e5e7eb',
+              background: myReactions.has(r.emoji) ? '#eff6ff' : '#f9fafb',
+              cursor: 'pointer', fontSize: 13, color: '#374151',
+              transition: 'all 0.1s',
+            }}
+          >
+            <span>{r.emoji}</span>
+            <span style={{ fontSize: 11, fontWeight: 600 }}>{r.count}</span>
+          </button>
+        ))}
+
+        {/* Add reaction button */}
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowReact(v => !v)}
+            style={{
+              padding: '3px 8px', borderRadius: 12,
+              border: '1px solid #e5e7eb',
+              background: '#f9fafb', cursor: 'pointer',
+              fontSize: 13, color: '#94a3b8',
+              transition: 'all 0.1s',
+            }}
+            title="React"
+          >
+            {totalReactions === 0 ? '😊 React' : '+ React'}
+          </button>
+
+          {/* Emoji picker popover */}
+          {showReact && (
+            <div style={{
+              position: 'absolute', bottom: '120%', left: 0,
+              background: '#fff', border: '1px solid #e5e7eb',
+              borderRadius: 10, padding: '8px 10px',
+              display: 'flex', gap: 4,
+              boxShadow: '0 4px 20px rgba(0,0,0,0.12)',
+              zIndex: 10,
+            }}>
+              {ALLOWED_REACTIONS.map(emoji => (
+                <button
+                  key={emoji}
+                  onClick={() => handleReaction(emoji)}
+                  style={{
+                    width: 32, height: 32, borderRadius: 8,
+                    border: 'none', background: 'transparent',
+                    cursor: 'pointer', fontSize: 18,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'background 0.1s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.background = '#f3f4f6'}
+                  onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.background = 'transparent'}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
           )}
         </div>
       </div>
