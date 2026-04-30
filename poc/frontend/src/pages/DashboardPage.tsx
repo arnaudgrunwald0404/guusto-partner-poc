@@ -9,7 +9,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { EMPLOYEES } from '../data/employees';
 
 const ALLOWED_REACTIONS = ['👏', '⭐', '🙌', '🔥', '❤️', '🚀'];
 
@@ -46,6 +45,12 @@ interface ProgramStats {
   uniqueRecipients: number;
   totalGiftedCents: number;
   redemptionRatePct: number;
+  coverage?: { totalEmployees: number; recognizedEmployees: number; coveragePct: string };
+  alerts?: {
+    unrecognizedEmployees: Array<{ employeeId: string; name: string }>;
+    gapThresholdDays: number;
+    inactiveManagers: Array<{ managerId: string; balanceCents: number }>;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +416,7 @@ export function DashboardPage() {
     fetch(`${API}/api/rr/admin/reports/summary`, { headers: ADMIN_HEADERS })
       .then(r => r.json())
       .then(d => setStats(d))
-      .catch(() => {/* static fallback shown below */});
+      .catch(() => {});
   }, []);
 
   return (
@@ -426,7 +431,7 @@ export function DashboardPage() {
         </p>
       </div>
 
-      {/* Quick stats — live when summary API responds, static fallback otherwise */}
+      {/* Quick stats */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 28 }}>
         <QuickStatCard
           n={stats ? String(stats.totalShoutouts) : '—'}
@@ -434,8 +439,8 @@ export function DashboardPage() {
           color="#1a56db"
         />
         <QuickStatCard
-          n={stats ? String(stats.uniqueRecipients) : '—'}
-          label="Employees recognized"
+          n={stats?.coverage ? `${stats.coverage.coveragePct}` : stats ? String(stats.uniqueRecipients) : '—'}
+          label="Employee coverage"
           color="#059669"
         />
         <QuickStatCard
@@ -450,82 +455,41 @@ export function DashboardPage() {
         />
       </div>
 
-      {/* Main content — 3 panels */}
+      {/* Main content — feed + values chart */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
         <LiveFeed />
         <ValuesChart />
       </div>
 
-      {/* Bottom row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-
-        {/* Team list */}
-        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' }}>
-          <div style={{
-            padding: '14px 20px', borderBottom: '1px solid #e5e7eb',
-            fontWeight: 700, fontSize: 14, color: '#374151',
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          }}>
-            Your team
-            <Link to="/employees" style={{ fontSize: 12, color: '#1a56db', textDecoration: 'none', fontWeight: 500 }}>
-              View all →
-            </Link>
+      {/* Bottom row — AI pipeline (full) */}
+      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' }}>
+        <div style={{
+          padding: '14px 20px', borderBottom: '1px solid #e5e7eb',
+          fontWeight: 700, fontSize: 14, color: '#374151',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{
+              display: 'inline-block', width: 8, height: 8, background: '#22c55e',
+              borderRadius: '50%', animation: 'pulse 2s infinite',
+            }} />
+            AI Recognition Pipeline
           </div>
-          {EMPLOYEES.map((emp, i) => (
-            <Link key={emp.id} to={`/employee/${emp.id}`} style={{ textDecoration: 'none' }}>
-              <div
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 12, padding: '14px 20px',
-                  borderBottom: i < EMPLOYEES.length - 1 ? '1px solid #f3f4f6' : 'none',
-                  transition: 'background 0.15s',
-                }}
-                onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = '#f9fafb'}
-                onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = 'transparent'}
-              >
-                <div style={{
-                  width: 38, height: 38, borderRadius: '50%', background: emp.avatarColor,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 14, fontWeight: 700, color: '#1e293b', flexShrink: 0,
-                }}>
-                  {emp.firstName[0]}{emp.lastName[0]}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: '#1e293b' }}>{emp.firstName} {emp.lastName}</div>
-                  <div style={{ fontSize: 12, color: '#9ca3af' }}>{emp.title}</div>
-                </div>
-                <span style={{ color: '#d1d5db', fontSize: 16 }}>›</span>
-              </div>
-            </Link>
-          ))}
+          <a href="http://localhost:3001/dashboard" target="_blank" rel="noopener noreferrer"
+             style={{ fontSize: 12, color: '#1a56db', textDecoration: 'none', fontWeight: 500 }}>
+            Open monitor →
+          </a>
         </div>
-
-        {/* AI Pipeline monitor */}
-        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' }}>
-          <div style={{
-            padding: '14px 20px', borderBottom: '1px solid #e5e7eb',
-            fontWeight: 700, fontSize: 14, color: '#374151',
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{
-                display: 'inline-block', width: 8, height: 8, background: '#22c55e',
-                borderRadius: '50%', animation: 'pulse 2s infinite',
-              }} />
-              AI Recognition Pipeline
-            </div>
-            <a href="http://localhost:3001/dashboard" target="_blank" rel="noopener noreferrer"
-               style={{ fontSize: 12, color: '#1a56db', textDecoration: 'none', fontWeight: 500 }}>
-              Open monitor →
-            </a>
-          </div>
-          <div style={{ padding: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
+          {/* Left: how it works */}
+          <div style={{ padding: 20, borderRight: '1px solid #f3f4f6' }}>
             <div style={{ background: '#f9fafb', borderRadius: 8, padding: '14px 16px', marginBottom: 12, border: '1px solid #f3f4f6' }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>How it works</div>
               <ol style={{ margin: 0, padding: '0 0 0 16px', fontSize: 13, color: '#6b7280', lineHeight: 1.8 }}>
                 <li>Gong call completes → webhook fires</li>
                 <li>Claude AI scans transcript for exceptional praise</li>
                 <li>Manager gets one-click approval email</li>
-                <li>Employee receives Guusto reward + recognition on profile</li>
+                <li>Employee receives recognition + optional Guusto reward</li>
               </ol>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -543,6 +507,69 @@ export function DashboardPage() {
                   <div style={{ fontSize: 11, color: '#6b7280' }}>2 calls — Claude detected a name but couldn't match it</div>
                 </div>
               </div>
+            </div>
+          </div>
+          {/* Right: frontline delivery spotlight */}
+          <div style={{ padding: 20 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 12 }}>
+              📱 Frontline delivery
+            </div>
+            <div style={{
+              padding: '16px', background: 'linear-gradient(135deg, #fffbeb, #fef9c3)',
+              border: '1px solid #fde68a', borderRadius: 10, marginBottom: 12,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <div style={{
+                  width: 40, height: 40, borderRadius: '50%',
+                  background: '#fce7f3', border: '2px solid #f59e0b',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 15, fontWeight: 800, color: '#1e293b', flexShrink: 0,
+                }}>CR</div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
+                    Carmen Rodriguez
+                    <span style={{
+                      marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#92400e',
+                      background: '#fef3c7', border: '1px solid #fde68a',
+                      borderRadius: 8, padding: '1px 6px',
+                    }}>FRONTLINE</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#92400e', marginTop: 1 }}>
+                    Retail Associate · Never recognized
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: '#78350f', lineHeight: 1.6, marginBottom: 10 }}>
+                No corporate email, no desk. When Carmen gets recognized, she receives
+                a personal QR link — no app or login needed. Scans in 10 seconds on any phone.
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <Link
+                  to="/manager"
+                  style={{
+                    display: 'inline-block', padding: '6px 14px',
+                    background: '#f59e0b', color: '#fff', borderRadius: 6,
+                    fontSize: 12, fontWeight: 700, textDecoration: 'none',
+                  }}
+                >
+                  Recognize Carmen ✨
+                </Link>
+                <Link
+                  to="/employee/emp_004"
+                  style={{
+                    display: 'inline-block', padding: '6px 12px',
+                    border: '1px solid #f59e0b', color: '#92400e', borderRadius: 6,
+                    fontSize: 12, fontWeight: 600, textDecoration: 'none',
+                    background: '#fff',
+                  }}
+                >
+                  View profile →
+                </Link>
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.6 }}>
+              <strong style={{ color: '#374151' }}>58% of the workforce</strong> is frontline.
+              ClearCompany R&R is one of few platforms that reaches them without requiring corporate access.
             </div>
           </div>
         </div>

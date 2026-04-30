@@ -109,7 +109,7 @@ export async function placeGuustoOrder(params: PlaceOrderParams): Promise<Guusto
           email: employeeEmail,
           firstName: employeeFirstName,
         },
-        amount: amountCents,
+        amount: amountCents / 100,
         language,
         message: recognitionMessage,
         externalReference: ccGiftId,

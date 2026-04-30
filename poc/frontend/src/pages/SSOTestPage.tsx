@@ -175,6 +175,14 @@ export function SSOTestPage() {
     setStep('placing');
     setError(null);
     try {
+      // Fetch a valid value ID first (backend requires at least one)
+      const valsRes = await fetch(`${API_BASE}/api/rr/admin/values`, {
+        headers: { 'x-user-role': 'hr_admin' },
+      });
+      const valsData = await valsRes.json() as { values: Array<{ id: string }> };
+      const valueId = valsData.values[0]?.id;
+      if (!valueId) throw new Error('No company values configured');
+
       const res = await fetch(`${API_BASE}/api/rr/shoutouts`, {
         method: 'POST',
         headers: {
@@ -185,7 +193,7 @@ export function SSOTestPage() {
         body: JSON.stringify({
           recipientId: RECIPIENT_ID,
           message: 'Outstanding work on the Q1 customer success initiative — your dedication made a real impact on the team and our clients.',
-          valueIds: [],
+          valueIds: [valueId],
           visibility: 'private',
           giftAmountCents: 2500,
         }),

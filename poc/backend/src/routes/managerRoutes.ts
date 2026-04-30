@@ -47,6 +47,74 @@ managerRouter.get('/budget', (req: Request, res: Response): void => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/rr/manager/suggestions — Gong AI recognition suggestions pending
+//   manager approval.  Filters to the requesting manager's direct reports
+//   so each manager only sees their own queue.
+// ---------------------------------------------------------------------------
+
+managerRouter.get('/suggestions', (req: Request, res: Response): void => {
+  const managerId = req.headers['x-user-id'] as string | undefined;
+  if (!managerId) {
+    res.status(401).json({ error: 'Missing x-user-id header' });
+    return;
+  }
+
+  const db = getDb();
+
+  // Pull all pending approvals (not yet decided, not expired) with their
+  // linked recognition + classification data.
+  const rows = db.prepare(`
+    SELECT
+      a.id         AS approval_id,
+      a.recognition_id,
+      a.expires_at,
+      r.employee_first_name,
+      r.employee_id,
+      r.evidence_quote,
+      r.recognition_message,
+      r.reward_amount_cents,
+      c.confidence
+    FROM rr_approvals a
+    JOIN rr_recognitions r ON r.id = a.recognition_id
+    LEFT JOIN rr_classifications c ON c.id = r.classification_id
+    WHERE a.decision IS NULL AND a.expires_at > datetime('now')
+    ORDER BY a.rowid DESC
+  `).all() as Array<{
+    approval_id: string;
+    recognition_id: string;
+    expires_at: string;
+    employee_first_name: string;
+    employee_id: string | null;
+    evidence_quote: string | null;
+    recognition_message: string | null;
+    reward_amount_cents: number;
+    confidence: number | null;
+  }>;
+
+  // Filter to this manager's direct reports (by employee_id lookup in stub directory)
+  const directReportIds = new Set(
+    STUB_EMPLOYEES.filter(e => e.managerId === managerId).map(e => e.id)
+  );
+
+  // If manager has no matching direct reports in the stub, return all suggestions
+  // (useful for the hackathon demo where managerId may not match stub exactly)
+  const suggestions = (directReportIds.size === 0 ? rows : rows.filter(r => directReportIds.has(r.employee_id ?? '')))
+    .map(r => ({
+      approvalId: r.approval_id,
+      recognitionId: r.recognition_id,
+      expiresAt: r.expires_at,
+      employeeFirstName: r.employee_first_name,
+      employeeId: r.employee_id,
+      evidenceQuote: r.evidence_quote,
+      recognitionMessage: r.recognition_message,
+      rewardAmountCents: r.reward_amount_cents,
+      confidence: r.confidence ?? null,
+    }));
+
+  res.json({ suggestions });
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/rr/manager/team — team participation + recognition gap alerts
 // ---------------------------------------------------------------------------
 

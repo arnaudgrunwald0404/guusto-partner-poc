@@ -29,7 +29,7 @@ import {
   NavigationTabs,
   type NavigationTabItem,
 } from '../lib/clearco-ui';
-import { MANAGER, type DirectReport, type RecognitionRecord } from '../data/employees';
+import { MANAGER, FRONTLINE_MANAGER, type DirectReport, type RecognitionRecord, type ManagerProfile } from '../data/employees';
 import { RecognizeDrawer } from '../components/RecognizeDrawer/RecognizeDrawer';
 import type { EmployeeProfile } from '../data/employees';
 
@@ -65,11 +65,76 @@ function formatDate(iso: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Manager switcher
+// ---------------------------------------------------------------------------
+
+const MANAGER_OPTIONS: { value: string; label: string; manager: ManagerProfile }[] = [
+  { value: 'mgr_001', label: 'Sarah Chen — VP Customer Success', manager: MANAGER },
+  { value: 'mgr_003', label: 'Luis Morales — Store Manager (Frontline)', manager: FRONTLINE_MANAGER },
+];
+
+interface ManagerSwitcherProps {
+  selectedId: string;
+  onChange: (id: string) => void;
+}
+
+function ManagerSwitcher({ selectedId, onChange }: ManagerSwitcherProps) {
+  const selected = MANAGER_OPTIONS.find(o => o.value === selectedId)!;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '10px 16px',
+      background: 'var(--mantine-color-blue-0)',
+      borderRadius: 10,
+      border: '1px solid var(--mantine-color-blue-2)',
+      fontSize: 13,
+    }}>
+      <span style={{ color: 'var(--mantine-color-blue-7)', fontWeight: 600, flexShrink: 0 }}>
+        👤 Viewing as:
+      </span>
+      <select
+        value={selectedId}
+        onChange={e => onChange(e.target.value)}
+        style={{
+          flex: 1,
+          border: 'none',
+          background: 'transparent',
+          fontSize: 13,
+          fontWeight: 600,
+          color: 'var(--mantine-color-gray-8)',
+          cursor: 'pointer',
+          outline: 'none',
+        }}
+      >
+        {MANAGER_OPTIONS.map(o => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+      {selected.value === 'mgr_003' && (
+        <span style={{
+          background: 'var(--mantine-color-pink-1)',
+          color: 'var(--mantine-color-pink-7)',
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 999,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          flexShrink: 0,
+        }}>
+          Frontline demo
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Budget panel
 // ---------------------------------------------------------------------------
 
-function BudgetPanel() {
-  const { budgetAllocatedCents, budgetSpentCents, budgetPeriodLabel, budgetWeeksRemaining, directReports } = MANAGER;
+function BudgetPanel({ manager }: { manager: ManagerProfile }) {
+  const { budgetAllocatedCents, budgetSpentCents, budgetPeriodLabel, budgetWeeksRemaining, directReports } = manager;
   const pct = Math.round((budgetSpentCents / budgetAllocatedCents) * 100);
   const remaining = budgetAllocatedCents - budgetSpentCents;
   const recognizedCount = directReports.filter(r => r.recognitionsThisQuarter > 0).length;
@@ -128,12 +193,12 @@ function BudgetPanel() {
             Transaction history
           </div>
         </div>
-        {MANAGER.directReports.flatMap(r => r.recognitionHistory).length === 0 ? (
+        {directReports.flatMap(r => r.recognitionHistory).length === 0 ? (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--mantine-color-gray-5)', fontSize: 14 }}>
             No rewards sent yet this quarter.
           </div>
         ) : (
-          MANAGER.directReports.flatMap(r =>
+          directReports.flatMap(r =>
             r.recognitionHistory.map(h => ({ ...h, employee: r }))
           ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
           .map(tx => (
@@ -216,8 +281,8 @@ function HistoryRow({ record, employee }: { record: RecognitionRecord; employee:
   );
 }
 
-function HistoryPanel() {
-  const allHistory = MANAGER.directReports
+function HistoryPanel({ manager }: { manager: ManagerProfile }) {
+  const allHistory = manager.directReports
     .flatMap(r => r.recognitionHistory.map(h => ({ record: h, employee: r })))
     .sort((a, b) => new Date(b.record.date).getTime() - new Date(a.record.date).getTime());
 
@@ -270,12 +335,28 @@ function TeamRow({ report, onRecognize, onViewProfile }: TeamRowProps) {
 
       {/* Name + title */}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--mantine-color-gray-9)' }}>
-          {report.firstName} {report.lastName}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--mantine-color-gray-9)' }}>
+            {report.firstName} {report.lastName}
+          </span>
+          {report.isFrontline && (
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 999,
+              background: 'var(--mantine-color-pink-1)', color: 'var(--mantine-color-pink-7)',
+              letterSpacing: '0.05em', textTransform: 'uppercase',
+            }}>
+              Frontline
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 12, color: 'var(--mantine-color-gray-5)', marginTop: 2 }}>
           {report.title} · {report.department}
         </div>
+        {report.isFrontline && (
+          <div style={{ fontSize: 11, color: 'var(--mantine-color-gray-4)', marginTop: 2 }}>
+            📱 Recognition delivered via personal QR link
+          </div>
+        )}
       </div>
 
       {/* Recognition status */}
@@ -312,30 +393,36 @@ const TABS: NavigationTabItem[] = [
 export function ManagerDashboardPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('team');
+  const [selectedManagerId, setSelectedManagerId] = useState('mgr_001');
   const [recognizeTarget, setRecognizeTarget] = useState<EmployeeProfile | null>(null);
 
-  const overdueReports = MANAGER.directReports.filter(
+  const manager = MANAGER_OPTIONS.find(o => o.value === selectedManagerId)!.manager;
+
+  const overdueReports = manager.directReports.filter(
     r => r.lastRecognizedDaysAgo === null || r.lastRecognizedDaysAgo > OVERDUE_THRESHOLD
   );
 
   const budgetPctLeft = Math.round(
-    ((MANAGER.budgetAllocatedCents - MANAGER.budgetSpentCents) / MANAGER.budgetAllocatedCents) * 100
+    ((manager.budgetAllocatedCents - manager.budgetSpentCents) / manager.budgetAllocatedCents) * 100
   );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       <PageHeader
         title="My Team"
-        description={`${MANAGER.directReports.length} direct reports · ${MANAGER.budgetPeriodLabel} recognition program`}
+        description={`${manager.directReports.length} direct report${manager.directReports.length !== 1 ? 's' : ''} · ${manager.budgetPeriodLabel} recognition program`}
         actionButtons={[
           <Badge key="budget" color={budgetPctLeft > 40 ? 'success' : 'warning'} variant="light">
-            {formatCents(MANAGER.budgetAllocatedCents - MANAGER.budgetSpentCents)} budget remaining
+            {formatCents(manager.budgetAllocatedCents - manager.budgetSpentCents)} budget remaining
           </Badge>,
-          <Button key="recognize" variant="primary" onClick={() => setRecognizeTarget(MANAGER.directReports[0])}>
+          <Button key="recognize" variant="primary" onClick={() => setRecognizeTarget(manager.directReports[0])}>
             Recognize someone ✨
           </Button>,
         ]}
       />
+
+      {/* Manager switcher — demo aid to switch between corporate and frontline manager */}
+      <ManagerSwitcher selectedId={selectedManagerId} onChange={id => { setSelectedManagerId(id); setRecognizeTarget(null); }} />
 
       {/* Equity gap alert — fires when any direct report is overdue */}
       {overdueReports.length > 0 && (
@@ -377,7 +464,7 @@ export function ManagerDashboardPage() {
             </div>
           </div>
 
-          {MANAGER.directReports.map(report => (
+          {manager.directReports.map(report => (
             <TeamRow
               key={report.id}
               report={report}
@@ -407,14 +494,14 @@ export function ManagerDashboardPage() {
         </Card>
       )}
 
-      {activeTab === 'history' && <HistoryPanel />}
-      {activeTab === 'budget' && <BudgetPanel />}
+      {activeTab === 'history' && <HistoryPanel manager={manager} />}
+      {activeTab === 'budget' && <BudgetPanel manager={manager} />}
 
       {/* Recognize drawer */}
       {recognizeTarget && (
         <RecognizeDrawer
           employee={recognizeTarget}
-          managerFirstName={MANAGER.firstName}
+          managerFirstName={manager.firstName}
           onClose={() => setRecognizeTarget(null)}
         />
       )}

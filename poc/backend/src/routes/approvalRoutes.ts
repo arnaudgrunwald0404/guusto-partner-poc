@@ -384,3 +384,79 @@ approvalRouter.get('/identify', async (req: Request, res: Response): Promise<voi
      <p style="${SECONDARY_STYLE}">Check your inbox, then you can close this tab.</p>`
   ));
 });
+
+// ---------------------------------------------------------------------------
+// Route: GET /approve-by-id — tokenless dashboard/UI approve
+//
+// Used by the React manager dashboard (no HMAC token, manager is already
+// authenticated via the CC session). Supports ?withReward=false to skip
+// the Guusto gift card and just record the recognition.
+//
+// GET /api/rr/approve-by-id?recognition_id=<id>&withReward=true|false
+// ---------------------------------------------------------------------------
+
+approvalRouter.get('/approve-by-id', (req: Request, res: Response): void => {
+  const { recognition_id, withReward } = req.query as { recognition_id?: string; withReward?: string };
+  if (!recognition_id) { res.status(400).json({ error: 'Missing recognition_id' }); return; }
+
+  const db = getDb();
+  const approval = db.prepare(`
+    SELECT id FROM rr_approvals
+    WHERE recognition_id = ? AND decision IS NULL
+    LIMIT 1
+  `).get(recognition_id) as { id: string } | undefined;
+
+  if (!approval) {
+    res.status(409).json({ error: 'Already decided or not found' });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  db.prepare("UPDATE rr_approvals SET decision='approved', decided_at=? WHERE id=?").run(now, approval.id);
+  db.prepare("UPDATE rr_recognitions SET reward_status='approved' WHERE id=?").run(recognition_id);
+
+  const sendReward = withReward !== 'false';
+  if (sendReward) {
+    triggerGuustoReward(recognition_id);
+  }
+
+  res.json({
+    ok: true,
+    recognitionId: recognition_id,
+    rewardTriggered: sendReward,
+    employeeName: getEmployeeName(recognition_id),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Route: GET /dismiss-by-id — tokenless dashboard/UI dismiss
+//
+// GET /api/rr/dismiss-by-id?recognition_id=<id>
+// ---------------------------------------------------------------------------
+
+approvalRouter.get('/dismiss-by-id', (req: Request, res: Response): void => {
+  const { recognition_id } = req.query as { recognition_id?: string };
+  if (!recognition_id) { res.status(400).json({ error: 'Missing recognition_id' }); return; }
+
+  const db = getDb();
+  const approval = db.prepare(`
+    SELECT id FROM rr_approvals
+    WHERE recognition_id = ? AND decision IS NULL
+    LIMIT 1
+  `).get(recognition_id) as { id: string } | undefined;
+
+  if (!approval) {
+    res.status(409).json({ error: 'Already decided or not found' });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  db.prepare("UPDATE rr_approvals SET decision='dismissed', decided_at=? WHERE id=?").run(now, approval.id);
+  db.prepare("UPDATE rr_recognitions SET reward_status='dismissed' WHERE id=?").run(recognition_id);
+
+  res.json({
+    ok: true,
+    recognitionId: recognition_id,
+    employeeName: getEmployeeName(recognition_id),
+  });
+});

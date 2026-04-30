@@ -256,11 +256,11 @@ function seedDefaults(db: Database.Database): void {
   // Default company values (PRD recommends max 8, seeding 5 to leave room)
   db.exec(`
     INSERT OR IGNORE INTO rr_company_values (id, tenant_id, label, emoji, sort_order, is_active, created_at) VALUES
-      ('val_001', 'default', 'Customer Focus',  '🤝', 1, 1, '2026-01-01T00:00:00Z'),
-      ('val_002', 'default', 'Innovation',       '💡', 2, 1, '2026-01-01T00:00:00Z'),
-      ('val_003', 'default', 'Team Player',      '🏆', 3, 1, '2026-01-01T00:00:00Z'),
-      ('val_004', 'default', 'Above & Beyond',   '🚀', 4, 1, '2026-01-01T00:00:00Z'),
-      ('val_005', 'default', 'Integrity',        '🛡️', 5, 1, '2026-01-01T00:00:00Z');
+      ('val_001', 'default', 'Customer at the Core',    '🤝', 1, 1, '2026-01-01T00:00:00Z'),
+      ('val_002', 'default', 'Listen to Many, Execute as One', '💬', 2, 1, '2026-01-01T00:00:00Z'),
+      ('val_003', 'default', 'Embrace Change',          '🌱', 3, 1, '2026-01-01T00:00:00Z'),
+      ('val_004', 'default', 'Accountable to Outcomes', '🎯', 4, 1, '2026-01-01T00:00:00Z'),
+      ('val_005', 'default', 'Raise the Bar',           '📈', 5, 1, '2026-01-01T00:00:00Z');
   `);
 
   // Default tenant configuration
@@ -310,12 +310,12 @@ function seedDefaults(db: Database.Database): void {
   // Seed value tags for demo shoutouts
   db.exec(`
     INSERT OR IGNORE INTO rr_shoutout_values (shoutout_id, value_id, value_label) VALUES
-      ('sht_seed_001', 'val_004', 'Above & Beyond'),
-      ('sht_seed_001', 'val_003', 'Team Player'),
-      ('sht_seed_002', 'val_003', 'Team Player'),
-      ('sht_seed_002', 'val_001', 'Customer Focus'),
-      ('sht_seed_003', 'val_002', 'Innovation'),
-      ('sht_seed_003', 'val_004', 'Above & Beyond');
+      ('sht_seed_001', 'val_004', 'Accountable to Outcomes'),
+      ('sht_seed_001', 'val_005', 'Raise the Bar'),
+      ('sht_seed_002', 'val_005', 'Raise the Bar'),
+      ('sht_seed_002', 'val_001', 'Customer at the Core'),
+      ('sht_seed_003', 'val_002', 'Listen to Many, Execute as One'),
+      ('sht_seed_003', 'val_004', 'Accountable to Outcomes');
   `);
 
   // Seed a couple of reactions on the demo shoutouts
