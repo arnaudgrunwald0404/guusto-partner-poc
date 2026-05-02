@@ -27,6 +27,7 @@ import {
   getBalance,
 } from '../services/budgetService.js';
 import { writeAuditLog } from '../services/shoutoutService.js';
+import { getGuustoWorkspaceBalance } from '../services/guustoService.js';
 
 export const adminRouter = Router();
 
@@ -148,7 +149,7 @@ adminRouter.patch('/values/:id', (req: Request, res: Response): void => {
 // Budget Management
 // ---------------------------------------------------------------------------
 
-adminRouter.get('/budget', (_req: Request, res: Response): void => {
+adminRouter.get('/budget', async (_req: Request, res: Response): Promise<void> => {
   const balances = getAllManagerBalances();
 
   const managers = balances.map(b => {
@@ -177,6 +178,34 @@ adminRouter.get('/budget', (_req: Request, res: Response): void => {
     totalBalanceCents: balances.reduce((s, b) => s + b.balance, 0),
   };
 
+  // Guusto workspace balance — try live fetch first, fall back to cached value
+  const db = getDb();
+  let workspaceBalanceCents: number | null = null;
+  let workspaceCheckedAt: string | null = null;
+  let workspaceLive = false;
+
+  try {
+    workspaceBalanceCents = await getGuustoWorkspaceBalance('USD');
+    workspaceLive = true;
+    workspaceCheckedAt = new Date().toISOString();
+  } catch {
+    // Use cached value from last scheduled check
+    const cachedBalance = db.prepare(
+      "SELECT value FROM rr_tenant_config WHERE key = 'guusto_workspace_balance_cents'"
+    ).get() as { value: string } | undefined;
+    const cachedAt = db.prepare(
+      "SELECT value FROM rr_tenant_config WHERE key = 'guusto_workspace_balance_checked_at'"
+    ).get() as { value: string } | undefined;
+    workspaceBalanceCents = cachedBalance ? parseInt(cachedBalance.value, 10) : null;
+    workspaceCheckedAt = cachedAt?.value ?? null;
+  }
+
+  const thresholdRow = db.prepare(
+    "SELECT value FROM rr_tenant_config WHERE key = 'guusto_low_balance_alert_cents'"
+  ).get() as { value: string } | undefined;
+  const alertThresholdCents = parseInt(thresholdRow?.value ?? '10000', 10);
+  const isLow = workspaceBalanceCents !== null && workspaceBalanceCents < alertThresholdCents;
+
   res.json({
     managers,
     orgSummary: {
@@ -186,6 +215,17 @@ adminRouter.get('/budget', (_req: Request, res: Response): void => {
       utilizationPct: orgTotals.totalAllocatedCents > 0
         ? ((orgTotals.totalSpentCents / orgTotals.totalAllocatedCents) * 100).toFixed(1)
         : '0.0',
+    },
+    guustoWorkspace: {
+      balanceCents: workspaceBalanceCents,
+      balanceDollars: workspaceBalanceCents !== null
+        ? (workspaceBalanceCents / 100).toFixed(2)
+        : null,
+      alertThresholdCents,
+      alertThresholdDollars: (alertThresholdCents / 100).toFixed(2),
+      isLow,
+      checkedAt: workspaceCheckedAt,
+      live: workspaceLive,
     },
   });
 });

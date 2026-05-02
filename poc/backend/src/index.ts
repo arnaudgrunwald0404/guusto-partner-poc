@@ -33,6 +33,14 @@
  *     GET  /api/rr/admin/config                tenant config
  *     PUT  /api/rr/admin/config                update config
  *     GET  /api/rr/admin/audit                 audit log (read-only)
+ *
+ *   Employee redemption:
+ *     GET  /api/rr/recipient/pending-gifts     — employee redemption inbox
+ *
+ *   R&R insights:
+ *     GET  /api/rr/nudges/people-to-recognize  recognition nudges for manager
+ *     GET  /api/rr/leaderboard                 top employees by recognition count
+ *     GET  /api/rr/feed/home                   company or team-scoped feed
  */
 
 import dotenv from 'dotenv';
@@ -52,6 +60,10 @@ import { managerRouter } from './routes/managerRoutes.js';
 import { employeeProfileRouter } from './routes/employeeProfileRoutes.js';
 import { recipientRouter } from './routes/recipientRoutes.js';
 import { aiRouter } from './routes/aiRoutes.js';
+import { automationRouter } from './routes/automationRoutes.js';
+import { rrInsightsRouter } from './routes/rrInsightsRoutes.js';
+import { pendingGiftsRouter } from './routes/pendingGiftsRoutes.js';
+import { runGuustoBalanceCheck } from './services/guustoService.js';
 
 const app = express();
 const PORT = parseInt(process.env['PORT'] ?? '3001', 10);
@@ -140,6 +152,9 @@ app.use('/api/rr/ai', aiRouter);
 app.use('/api/rr/manager', managerRouter);
 app.use('/api/rr/employees', employeeProfileRouter);
 app.use('/api/rr/admin', adminRouter);
+app.use('/api/rr/admin/automations', automationRouter);
+app.use('/api/rr', rrInsightsRouter);
+app.use('/api/rr/recipient', pendingGiftsRouter);
 
 // Public read of active company values — any authenticated user may fetch these
 // (admin/values requires hr_admin; this serves the compose drawer for managers)
@@ -194,6 +209,10 @@ app.listen(PORT, () => {
 
   runExpiryJob();
   setInterval(runExpiryJob, 60 * 60 * 1_000);
+
+  // Hourly Guusto workspace balance check — caches result + warns if low
+  void runGuustoBalanceCheck();
+  setInterval(() => void runGuustoBalanceCheck(), 60 * 60 * 1_000);
 });
 
 export { app };
