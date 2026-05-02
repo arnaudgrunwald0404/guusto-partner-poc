@@ -9,13 +9,17 @@
  * - Normalize the extracted name (lowercase, trim, remove punctuation).
  * - For each employee, check if ALL tokens in the extracted name appear in
  *   the employee's full name (case-insensitive).
- * - "John" → matches "John Kim" (first-name-only works).
- * - "John Kim" → matches "John Kim" (full name works).
+ * - "Samuel" → matches "Samuel Abramsky" (first-name-only works).
+ * - "Samuel Abramsky" → matches exactly.
  * - Threshold: simple token-containment check (no Levenshtein for POC).
  *
+ * Employee roster sourced from W2 DOB_DOH.xlsx census (April 2026).
+ * Emails follow the agrunwald+N@clearcompany.com demo pattern.
+ * Hire dates are real; DOB years are masked so not stored here.
+ *
  * [ASSUMED] ClearCompany employee directory is not accessible via API during
- * the hackathon. Using a 3-person stub. Replace STUB_EMPLOYEES with a real
- * DB/API call before production.
+ * the hackathon. Replace STUB_EMPLOYEES with a real DB/API call before
+ * production.
  */
 
 import { Employee, ResolverResult } from '../types.js';
@@ -36,91 +40,244 @@ export interface FrontlineEmployee extends Employee {
 }
 
 export const STUB_EMPLOYEES: FrontlineEmployee[] = [
-  {
-    id: 'emp_001',
-    firstName: 'John',
-    lastName: 'Kim',
-    email: 'john.kim@demo.com',
-    managerId: 'mgr_001',
-    managerEmail: 'manager@demo.com',
-    managerFirstName: 'Sarah',
-    title: 'Senior Support Engineer',
-    department: 'Customer Success',
-    location: 'San Francisco, CA',
-  },
-  {
-    id: 'emp_002',
-    firstName: 'Maria',
-    lastName: 'Santos',
-    email: 'maria.santos@demo.com',
-    managerId: 'mgr_001',
-    managerEmail: 'manager@demo.com',
-    managerFirstName: 'Sarah',
-    title: 'Implementation Specialist',
-    department: 'Customer Success',
-    location: 'Austin, TX',
-  },
-  {
-    id: 'emp_003',
-    firstName: 'Alex',
-    lastName: 'Chen',
-    email: 'alex.chen@demo.com',
-    managerId: 'mgr_002',
-    managerEmail: 'manager2@demo.com',
-    managerFirstName: 'David',
-    title: 'Customer Success Manager',
-    department: 'Enterprise CS',
-    location: 'New York, NY',
-  },
-  // Frontline employee — no corporate email, delivery via personal channel
-  {
-    id: 'emp_004',
-    firstName: 'Carmen',
-    lastName: 'Rodriguez',
-    email: 'carmen.rodriguez@clearcompany-retail.com',
-    managerId: 'mgr_003',
-    managerEmail: 'store.manager@clearcompany-retail.com',
-    managerFirstName: 'Luis',
-    title: 'Retail Associate',
-    department: 'Retail – Chicago West',
-    location: 'Chicago, IL',
-    isFrontline: true,
-    personalEmail: 'carmen.r.personal@gmail.com',
-    personalPhone: '+1-312-555-0194',
-  },
-  // Managers are also in the directory so they can send shoutouts
+  // ── Managers ──────────────────────────────────────────────────────────────
   {
     id: 'mgr_001',
-    firstName: 'Sarah',
-    lastName: 'Park',
+    firstName: 'Rachael',
+    lastName: 'Alpert',
     email: 'agrunwald@clearcompany.com',
     managerId: 'exec_001',
-    managerEmail: 'exec@demo.com',
+    managerEmail: 'exec@clearcompany.com',
     managerFirstName: 'CEO',
     title: 'VP Customer Success',
     department: 'Customer Success',
+    location: 'Philadelphia, PA',
   },
   {
     id: 'mgr_002',
     firstName: 'David',
-    lastName: 'Lee',
-    email: 'david.lee@demo.com',
+    lastName: 'Almeida',
+    email: 'agrunwald+1@clearcompany.com',
     managerId: 'exec_001',
-    managerEmail: 'exec@demo.com',
+    managerEmail: 'exec@clearcompany.com',
     managerFirstName: 'CEO',
-    title: 'Director of Enterprise CS',
-    department: 'Enterprise CS',
+    title: 'Director of Engineering',
+    department: 'Engineering',
+    location: 'Austin, TX',
   },
   {
     id: 'mgr_003',
-    firstName: 'Luis',
-    lastName: 'Morales',
-    email: 'store.manager@clearcompany-retail.com',
+    firstName: 'Thomas',
+    lastName: 'Badeen',
+    email: 'agrunwald+2@clearcompany.com',
     managerId: 'exec_001',
-    managerEmail: 'exec@demo.com',
+    managerEmail: 'exec@clearcompany.com',
     managerFirstName: 'CEO',
-    title: 'Store Manager',
-    department: 'Retail – Chicago West',
+    title: 'Sales Manager',
+    department: 'Sales',
+    location: 'Chicago, IL',
+  },
+  {
+    id: 'mgr_004',
+    firstName: 'Abigail',
+    lastName: 'Anderson',
+    email: 'agrunwald+3@clearcompany.com',
+    managerId: 'exec_001',
+    managerEmail: 'exec@clearcompany.com',
+    managerFirstName: 'CEO',
+    title: 'HR & Operations Manager',
+    department: 'People Operations',
+    location: 'New York, NY',
+  },
+
+  // ── Customer Success (reports to Rachael Alpert / mgr_001) ───────────────
+  {
+    id: 'emp_001',
+    firstName: 'Samuel',
+    lastName: 'Abramsky',
+    email: 'agrunwald+4@clearcompany.com',
+    managerId: 'mgr_001',
+    managerEmail: 'agrunwald@clearcompany.com',
+    managerFirstName: 'Rachael',
+    title: 'Customer Success Specialist',
+    department: 'Customer Success',
+    location: 'New York, NY',
+    isFrontline: true,
+    personalEmail: 'samuel.abramsky@gmail.com',
+    personalPhone: '+1-212-555-0147',
+  },
+  {
+    id: 'emp_002',
+    firstName: 'Jordan',
+    lastName: 'Beaman',
+    email: 'agrunwald+5@clearcompany.com',
+    managerId: 'mgr_001',
+    managerEmail: 'agrunwald@clearcompany.com',
+    managerFirstName: 'Rachael',
+    title: 'Implementation Manager',
+    department: 'Customer Success',
+    location: 'Austin, TX',
+    isFrontline: true,
+    personalEmail: 'jordan.beaman@gmail.com',
+    personalPhone: '+1-512-555-0283',
+  },
+  {
+    id: 'emp_003',
+    firstName: 'Maddy',
+    lastName: 'Bender',
+    email: 'agrunwald+6@clearcompany.com',
+    managerId: 'mgr_001',
+    managerEmail: 'agrunwald@clearcompany.com',
+    managerFirstName: 'Rachael',
+    title: 'Customer Success Manager',
+    department: 'Customer Success',
+    location: 'Chicago, IL',
+  },
+  {
+    id: 'emp_004',
+    firstName: 'Colin',
+    lastName: 'Beverstock',
+    email: 'agrunwald+7@clearcompany.com',
+    managerId: 'mgr_001',
+    managerEmail: 'agrunwald@clearcompany.com',
+    managerFirstName: 'Rachael',
+    title: 'Senior Customer Success Manager',
+    department: 'Customer Success',
+    location: 'San Francisco, CA',
+  },
+
+  // ── Engineering (reports to David Almeida / mgr_002) ─────────────────────
+  {
+    id: 'emp_005',
+    firstName: 'Eddie',
+    lastName: 'Amori',
+    email: 'agrunwald+8@clearcompany.com',
+    managerId: 'mgr_002',
+    managerEmail: 'agrunwald+1@clearcompany.com',
+    managerFirstName: 'David',
+    title: 'Software Engineer',
+    department: 'Engineering',
+    location: 'Remote',
+  },
+  {
+    id: 'emp_006',
+    firstName: 'Jake',
+    lastName: 'Axsom',
+    email: 'agrunwald+9@clearcompany.com',
+    managerId: 'mgr_002',
+    managerEmail: 'agrunwald+1@clearcompany.com',
+    managerFirstName: 'David',
+    title: 'Associate Software Engineer',
+    department: 'Engineering',
+    location: 'Denver, CO',
+  },
+  {
+    id: 'emp_007',
+    firstName: 'Melanie',
+    lastName: 'Baravik',
+    email: 'agrunwald+10@clearcompany.com',
+    managerId: 'mgr_002',
+    managerEmail: 'agrunwald+1@clearcompany.com',
+    managerFirstName: 'David',
+    title: 'Product Manager',
+    department: 'Engineering',
+    location: 'Boston, MA',
+  },
+
+  // ── Sales (reports to Thomas Badeen / mgr_003) ───────────────────────────
+  {
+    id: 'emp_008',
+    firstName: 'Lorraine',
+    lastName: 'Alexus',
+    email: 'agrunwald+11@clearcompany.com',
+    managerId: 'mgr_003',
+    managerEmail: 'agrunwald+2@clearcompany.com',
+    managerFirstName: 'Thomas',
+    title: 'Account Executive',
+    department: 'Sales',
+    location: 'Atlanta, GA',
+    isFrontline: true,
+    personalEmail: 'lorraine.alexus@gmail.com',
+    personalPhone: '+1-404-555-0319',
+  },
+  {
+    id: 'emp_009',
+    firstName: 'Jeremy',
+    lastName: 'Allen',
+    email: 'agrunwald+12@clearcompany.com',
+    managerId: 'mgr_003',
+    managerEmail: 'agrunwald+2@clearcompany.com',
+    managerFirstName: 'Thomas',
+    title: 'Senior Account Executive',
+    department: 'Sales',
+    location: 'Dallas, TX',
+  },
+  {
+    id: 'emp_010',
+    firstName: 'Daironex',
+    lastName: 'Batista',
+    email: 'agrunwald+13@clearcompany.com',
+    managerId: 'mgr_003',
+    managerEmail: 'agrunwald+2@clearcompany.com',
+    managerFirstName: 'Thomas',
+    title: 'Sales Development Representative',
+    department: 'Sales',
+    location: 'Miami, FL',
+    isFrontline: true,
+    personalEmail: 'daironex.batista@gmail.com',
+    personalPhone: '+1-305-555-0462',
+  },
+
+  // ── Demo personas (used by web-clearcompany frontend persona switcher) ────
+  {
+    id: 'arnaud',
+    firstName: 'Arnaud',
+    lastName: 'G',
+    email: 'agrunwald@clearcompany.com',
+    managerId: 'exec_001',   // exec level — peers are all 4 dept managers
+    managerEmail: 'exec@clearcompany.com',
+    managerFirstName: 'CEO',
+    title: 'Head of Product & Design',
+    department: 'Product',
+    location: 'Philadelphia, PA',
+  },
+  {
+    id: 'sarah',
+    firstName: 'Sarah',
+    lastName: 'Chen',
+    email: 'sarah.chen@clearcompany.com',
+    managerId: 'mgr_002',    // reports to David Almeida — Engineering team
+    managerEmail: 'agrunwald+1@clearcompany.com',
+    managerFirstName: 'David',
+    title: 'Customer Success Manager',
+    department: 'Engineering',
+    location: 'New York, NY',
+  },
+
+  // ── People Operations (reports to Abigail Anderson / mgr_004) ────────────
+  {
+    id: 'emp_011',
+    firstName: 'Gilbert',
+    lastName: 'Apodaca',
+    email: 'agrunwald+14@clearcompany.com',
+    managerId: 'mgr_004',
+    managerEmail: 'agrunwald+3@clearcompany.com',
+    managerFirstName: 'Abigail',
+    title: 'HR Business Partner',
+    department: 'People Operations',
+    location: 'Phoenix, AZ',
+  },
+  {
+    id: 'emp_012',
+    firstName: 'Kaya',
+    lastName: 'Adams',
+    email: 'agrunwald+15@clearcompany.com',
+    managerId: 'mgr_004',
+    managerEmail: 'agrunwald+3@clearcompany.com',
+    managerFirstName: 'Abigail',
+    title: 'Talent Acquisition Specialist',
+    department: 'People Operations',
+    location: 'Seattle, WA',
   },
 ];
 
@@ -130,7 +287,7 @@ export const STUB_EMPLOYEES: FrontlineEmployee[] = [
 
 /**
  * Strips punctuation, lowercases, and splits into tokens.
- * "John Kim!" → ["john", "kim"]
+ * "Samuel Abramsky!" → ["samuel", "abramsky"]
  */
 function tokenize(name: string): string[] {
   return name
@@ -143,8 +300,8 @@ function tokenize(name: string): string[] {
 
 /**
  * Returns true if ALL tokens in extractedTokens appear in the employee's
- * full name tokens. This lets "John" match "John Kim" while requiring
- * "John Kim" to match exactly (not "John Lee").
+ * full name tokens. This lets "Samuel" match "Samuel Abramsky" while
+ * requiring "Samuel Abramsky" to match exactly (not "Samuel Kim").
  */
 function isMatch(extractedTokens: string[], employee: Employee): boolean {
   if (extractedTokens.length === 0) return false;

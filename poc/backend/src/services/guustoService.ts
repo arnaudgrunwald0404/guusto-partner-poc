@@ -5,17 +5,24 @@
  * Auth: Authorization: Bearer <GUUSTO_BEARER_TOKEN>
  *       X-Workspace-id: <GUUSTO_WORKSPACE_ID>
  *
+ * Endpoints used:
+ *   POST /api/v1/orders                          — place gift order
+ *   GET  /api/v1/orders/status/{requestId}       — poll order status
+ *   GET  /api/v1/orders/{requestId}              — full detail + redemption URL
+ *   GET  /api/v1/balances/workspaces/currencies/{currency} — workspace balance
+ *
  * Flow:
- *   1. placeGuustoOrder()  → POST /api/v1/orders → persists rr_orders row
- *   2. pollOrderStatus()   → GET  /api/v1/orders/status/{requestId}
- *                           every 30s, up to 40 attempts (20 min total)
- *   3. On COMPLETED  → reward_status='reward_sent'
+ *   0. checkWorkspaceBalance()  → GET /api/v1/balances/workspaces/currencies/USD
+ *                                 Pre-flight: abort if workspace underfunded.
+ *   1. placeGuustoOrder()       → POST /api/v1/orders → persists rr_orders row
+ *   2. pollOrderStatus()        → GET  /api/v1/orders/status/{requestId}
+ *                                 every 30s, up to 40 attempts (20 min total)
+ *   3. On COMPLETED  → captureRedemptionUrl() → extracts JWT longToken
  *      On FAILED     → reward_status='reward_failed', send failure email
  *      On timeout    → reward_status='poll_timeout'
  *
- * [ASSUMED] recipientEmail is valid Guusto field (confirm from demo response).
- * [ASSUMED] EN_CA acceptable for US recipients — locale gap documented in findings.
- * [ASSUMED] externalReference echoed back in COMPLETED response for data-join.
+ * Balance response: { balance: number } — value is in cents (USD/CAD).
+ * Locale gap: EN_US not available; using EN_CA for all US recipients.
  */
 
 import { randomUUID } from 'crypto';
@@ -29,6 +36,28 @@ import { sendFailureEmail } from './emailService.js';
 const GUUSTO_BASE_URL = process.env.GUUSTO_API_BASE_URL ?? 'https://api-demo.guusto.io';
 const POLL_INTERVAL_MS = 30_000;
 const MAX_POLL_ATTEMPTS = 40; // 20 minutes total
+
+// ---------------------------------------------------------------------------
+// Workspace balance — error class
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown by placeGuustoOrder() when the Guusto workspace is underfunded.
+ * Callers should surface this as a 503 / operational alert rather than
+ * rolling back a CC budget deduction (none has been made yet).
+ */
+export class WorkspaceUnderfundedError extends Error {
+  constructor(
+    public readonly workspaceBalanceCents: number,
+    public readonly orderAmountCents: number,
+    public readonly currency: string,
+  ) {
+    super(
+      `Guusto workspace underfunded: balance ${workspaceBalanceCents}¢ < order ${orderAmountCents}¢ (${currency})`,
+    );
+    this.name = 'WorkspaceUnderfundedError';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,6 +110,81 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace balance check
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetches the live Guusto workspace balance for the given currency.
+ * Returns the value in **cents** (the API returns dollars as a float).
+ *
+ * Also caches the result in rr_tenant_config so the admin budget endpoint
+ * can display it without an extra live round-trip, and so the scheduled job
+ * can persist the last known balance even when no order is in flight.
+ *
+ * Throws on network / auth errors — callers should catch and log rather than
+ * blocking an order on a transient check failure.
+ */
+export async function getGuustoWorkspaceBalance(currency: string = 'USD'): Promise<number> {
+  const headers = getAuthHeaders();
+  const res = await fetch(
+    `${GUUSTO_BASE_URL}/api/v1/balances/workspaces/currencies/${encodeURIComponent(currency)}`,
+    { headers, signal: AbortSignal.timeout(10_000) },
+  );
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Guusto balance check failed: ${res.status} ${text}`);
+  }
+
+  // Response: { balance: 497400.00 } — dollars, not cents
+  const data = JSON.parse(text) as { balance?: number };
+  if (typeof data.balance !== 'number') {
+    throw new Error(`Unexpected Guusto balance response: ${text}`);
+  }
+
+  const balanceCents = Math.round(data.balance * 100);
+  const now = new Date().toISOString();
+
+  // Cache into tenant config for admin endpoint / monitoring
+  const db = getDb();
+  const upsert = db.prepare(`
+    INSERT INTO rr_tenant_config (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `);
+  upsert.run('guusto_workspace_balance_cents', String(balanceCents), now);
+  upsert.run('guusto_workspace_balance_checked_at', now, now);
+
+  console.log(`[guusto] Workspace balance: ${balanceCents}¢ (${currency}) — cached at ${now}`);
+  return balanceCents;
+}
+
+/**
+ * Scheduled health-check wrapper — fetches balance, compares to alert
+ * threshold stored in tenant config, and logs a warning when low.
+ * Safe to call on any interval; never throws.
+ */
+export async function runGuustoBalanceCheck(): Promise<void> {
+  try {
+    const balanceCents = await getGuustoWorkspaceBalance('USD');
+    const db = getDb();
+    const thresholdRow = db.prepare(
+      "SELECT value FROM rr_tenant_config WHERE key = 'guusto_low_balance_alert_cents'"
+    ).get() as { value: string } | undefined;
+    const threshold = parseInt(thresholdRow?.value ?? '10000', 10);
+
+    if (balanceCents < threshold) {
+      console.warn(
+        `[guusto] ⚠ LOW WORKSPACE BALANCE: ${balanceCents}¢ < threshold ${threshold}¢. ` +
+        `Top up the Guusto workspace before sending more gifts.`
+      );
+    }
+  } catch (err) {
+    console.warn('[guusto] Balance check failed (non-fatal):', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Place order
 // ---------------------------------------------------------------------------
 
@@ -97,8 +201,21 @@ export async function placeGuustoOrder(params: PlaceOrderParams): Promise<Guusto
 
   const headers = getAuthHeaders(); // throws if creds missing
 
-  const ccGiftId = randomUUID();
+  // Pre-flight: abort early if Guusto workspace cannot cover this order.
+  // We check BEFORE deducting the CC manager budget so no rollback is needed.
+  // A transient balance-check failure is non-blocking — we log and continue.
   const currency = 'USD';
+  try {
+    const workspaceBalance = await getGuustoWorkspaceBalance(currency);
+    if (workspaceBalance < amountCents) {
+      throw new WorkspaceUnderfundedError(workspaceBalance, amountCents, currency);
+    }
+  } catch (err) {
+    if (err instanceof WorkspaceUnderfundedError) throw err; // always propagate
+    console.warn('[guusto] Pre-flight balance check failed (non-blocking):', err);
+  }
+
+  const ccGiftId = randomUUID();
   const language = 'EN_CA';
 
   const body = {
