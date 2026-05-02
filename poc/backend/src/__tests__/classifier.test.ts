@@ -86,24 +86,24 @@ describe('classifyTranscript()', () => {
       mockToolUseResponse({
         is_exceptional_praise: true,
         confidence: 0.92,
-        employee_name_mentioned: 'John Kim',
-        evidence_quote: "He's the best support engineer we've ever worked with.",
+        employee_name_mentioned: 'Samuel Abramsky',
+        evidence_quote: "He's the best customer success specialist we've ever worked with.",
         sentiment_magnitude: 'very_high',
         recognition_draft:
-          "John — a customer said on a recent call: 'He's the best support engineer we've ever worked with.' That's exceptional. Thank you.",
+          "Samuel — a customer said on a recent call: 'He's the best customer success specialist we've ever worked with.' That's exceptional. Thank you.",
         reasoning: 'Customer used superlatives, named employee directly, unprompted.',
       })
     );
 
     const result = await classifyTranscript(
-      "John Kim is the best support engineer we've ever worked with."
+      "Samuel Abramsky is the best customer success specialist we've ever worked with."
     );
 
     expect(result.result).toBe('classified');
     if (result.result === 'classified') {
       expect(result.data.is_exceptional_praise).toBe(true);
       expect(result.data.confidence).toBeGreaterThanOrEqual(0.75);
-      expect(result.data.employee_name_mentioned).toBe('John Kim');
+      expect(result.data.employee_name_mentioned).toBe('Samuel Abramsky');
       expect(result.data.evidence_quote).toBeTruthy();
       expect(result.data.recognition_draft).toBeTruthy();
     }
@@ -244,17 +244,17 @@ describe('classifyTranscript()', () => {
     const toolInput = {
       is_exceptional_praise: true,
       confidence: 0.88,
-      employee_name_mentioned: 'Maria Santos',
-      evidence_quote: 'Maria saved our account.',
+      employee_name_mentioned: 'Jordan Beaman',
+      evidence_quote: 'Jordan saved our implementation.',
       sentiment_magnitude: 'very_high' as const,
-      recognition_draft: 'Maria — a customer said you saved their account. Amazing work.',
+      recognition_draft: 'Jordan — a customer said you saved their implementation. Amazing work.',
       reasoning: 'Strong superlative language, named employee, unprompted.',
     };
 
     mockCreate.mockResolvedValueOnce(mockToolUseResponse(toolInput));
 
     const result = await classifyTranscript(
-      'Maria Santos saved our account, I cannot overstate how much she helped.'
+      'Jordan Beaman saved our implementation, I cannot overstate how much she helped.'
     );
 
     expect(result.result).toBe('classified');
