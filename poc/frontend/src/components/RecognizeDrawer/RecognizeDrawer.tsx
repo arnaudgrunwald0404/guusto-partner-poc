@@ -17,7 +17,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { GiftCardPreview } from './GiftCardPreview';
-import type { EmployeeProfile } from '../../data/employees';
+import type { EmployeeProfile, DirectReport, RecognitionRecord } from '../../data/employees';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,7 +34,12 @@ interface CompanyValue {
 }
 
 interface RecognizeDrawerProps {
-  employee: EmployeeProfile;
+  /** Pre-selected recipient. When omitted, the user picks from the employees list. */
+  employee?: EmployeeProfile | null;
+  /** Full list of selectable employees (used when employee is not pre-selected). */
+  employees?: DirectReport[];
+  /** Manager's remaining budget in cents — shown in the optional reward section. */
+  availableBudgetCents?: number;
   managerFirstName?: string;
   /** POC mock: the logged-in manager's employee ID, passed as x-user-id header */
   senderId?: string;
@@ -149,8 +154,14 @@ function Confetti() {
 // ---------------------------------------------------------------------------
 
 interface ComposeStepProps {
-  employee: EmployeeProfile;
+  employee: EmployeeProfile | null;
+  employees: DirectReport[];
+  onSelectEmployee: (e: DirectReport | null) => void;
   managerFirstName: string;
+  availableBudgetCents: number;
+  includeReward: boolean;
+  setIncludeReward: (v: boolean) => void;
+  pastRewards: RecognitionRecord[];
   companyValues: CompanyValue[];
   valuesLoading: boolean;
   valueId: string;
@@ -163,11 +174,18 @@ interface ComposeStepProps {
   onNext: () => void;
   onAiDraft: () => void;
   aiDrafting: boolean;
+  aiDraftError: string | null;
 }
 
 function ComposeStep({
   employee,
+  employees,
+  onSelectEmployee,
   managerFirstName,
+  availableBudgetCents,
+  includeReward,
+  setIncludeReward,
+  pastRewards,
   companyValues,
   valuesLoading,
   valueId,
@@ -180,13 +198,18 @@ function ComposeStep({
   onNext,
   onAiDraft,
   aiDrafting,
+  aiDraftError,
 }: ComposeStepProps) {
   const trimmed = message.trim();
-  const canProceed = valueId !== '' && trimmed.length >= MSG_MIN;
+  const canProceed = employee !== null && valueId !== '' && trimmed.length >= MSG_MIN;
   const remaining = MSG_MAX - message.length;
   const charsToMin = Math.max(0, MSG_MIN - trimmed.length);
 
   const selectedValue = companyValues.find(v => v.id === valueId);
+
+  function formatCentsShort(cents: number) {
+    return `$${(cents / 100).toFixed(0)}`;
+  }
 
   return (
     <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0, overflow: 'hidden' }}>
@@ -203,47 +226,154 @@ function ComposeStep({
         {/* Recipient */}
         <div>
           <label style={labelStyle}>To</label>
+          {employee ? (
+            /* Locked — pre-selected from employee profile */
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '10px 12px',
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: 8,
+            }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: '50%',
+                background: employee.avatarColor,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 13, fontWeight: 700, color: '#1e293b', flexShrink: 0,
+              }}>
+                {employee.firstName[0]}{employee.lastName[0]}
+              </div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: '#1e293b' }}>
+                  {employee.firstName} {employee.lastName}
+                </div>
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>{employee.email}</div>
+              </div>
+            </div>
+          ) : (
+            /* Free-form — pick from dropdown */
+            <select
+              value=""
+              onChange={e => {
+                const found = employees.find(emp => emp.id === e.target.value) ?? null;
+                onSelectEmployee(found);
+              }}
+              style={{
+                ...inputStyle,
+                color: '#94a3b8',
+                appearance: 'none',
+                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%2394a3b8' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14L2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E")`,
+                backgroundRepeat: 'no-repeat',
+                backgroundPosition: 'right 12px center',
+                paddingRight: 36,
+              }}
+            >
+              <option value="">Select a team member…</option>
+              {employees.map(emp => (
+                <option key={emp.id} value={emp.id}>
+                  {emp.firstName} {emp.lastName} — {emp.title}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {/* Past rewards to this individual */}
+        {pastRewards.length > 0 && (
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 10,
-            padding: '10px 12px',
             background: '#f8fafc',
             border: '1px solid #e2e8f0',
             borderRadius: 8,
+            padding: '12px 14px',
           }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>
+              Past rewards to {employee?.firstName}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {pastRewards.map(r => (
+                <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13 }}>
+                  <span style={{ color: '#475569' }}>
+                    {r.value} · {new Date(r.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  </span>
+                  {r.rewardSent && (
+                    <span style={{
+                      fontWeight: 600, color: '#059669',
+                      background: '#f0fdf4', border: '1px solid #bbf7d0',
+                      borderRadius: 12, padding: '2px 8px', fontSize: 11,
+                    }}>
+                      🎁 {formatCentsShort(r.rewardAmount)} sent
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Optional reward toggle */}
+        <div>
+          <label style={labelStyle}>Reward</label>
+          <div
+            onClick={() => setIncludeReward(!includeReward)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              padding: '12px 14px',
+              border: `1px solid ${includeReward ? '#93c5fd' : '#e2e8f0'}`,
+              borderRadius: 8,
+              background: includeReward ? '#eff6ff' : '#fff',
+              cursor: 'pointer',
+              userSelect: 'none',
+              transition: 'all 0.15s',
+            }}
+          >
+            {/* Toggle pill */}
             <div style={{
-              width: 32, height: 32, borderRadius: '50%',
-              background: employee.avatarColor,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 13, fontWeight: 700, color: '#1e293b', flexShrink: 0,
+              width: 36, height: 20, borderRadius: 10,
+              background: includeReward ? '#1a56db' : '#cbd5e1',
+              position: 'relative', flexShrink: 0,
+              transition: 'background 0.2s',
             }}>
-              {employee.firstName[0]}{employee.lastName[0]}
+              <div style={{
+                position: 'absolute',
+                top: 2, left: includeReward ? 18 : 2,
+                width: 16, height: 16, borderRadius: '50%',
+                background: '#fff',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                transition: 'left 0.2s',
+              }} />
             </div>
             <div>
               <div style={{ fontSize: 14, fontWeight: 600, color: '#1e293b' }}>
-                {employee.firstName} {employee.lastName}
+                Include a Guusto gift card reward
               </div>
-              <div style={{ fontSize: 12, color: '#94a3b8' }}>{employee.email}</div>
+              <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                {includeReward
+                  ? `$25 USD · Available budget: ${formatCentsShort(availableBudgetCents)} remaining`
+                  : 'Optional — recognition is valuable on its own'}
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Amount badge */}
-        <div>
-          <label style={labelStyle}>Reward amount</label>
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: 8,
-            padding: '10px 16px',
-            background: 'linear-gradient(135deg, #0f2044, #1a3a6e)',
-            borderRadius: 8, color: '#fff',
-          }}>
-            <span style={{ fontSize: 22, fontWeight: 800 }}>$25</span>
-            <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>USD · Guusto Gift Card</span>
-            <span style={{
-              marginLeft: 4, fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
-              background: 'rgba(255,255,255,0.15)', padding: '2px 8px', borderRadius: 10,
-              color: 'rgba(255,255,255,0.8)',
-            }}>FIXED</span>
-          </div>
+          {includeReward && (
+            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: 8,
+                padding: '10px 16px',
+                background: 'linear-gradient(135deg, #0f2044, #1a3a6e)',
+                borderRadius: 8, color: '#fff',
+              }}>
+                <span style={{ fontSize: 22, fontWeight: 800 }}>$25</span>
+                <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>USD · Guusto Gift Card</span>
+              </div>
+              <div style={{
+                fontSize: 12, color: '#059669', fontWeight: 600,
+                background: '#f0fdf4', border: '1px solid #bbf7d0',
+                borderRadius: 8, padding: '6px 10px',
+              }}>
+                {formatCentsShort(availableBudgetCents)} available
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Company value */}
@@ -301,15 +431,23 @@ function ComposeStep({
                   animation: 'spin 0.7s linear infinite',
                   display: 'inline-block',
                 }} />
-                Drafting with AI…
+                {trimmed.length > 0 ? 'Improving with AI…' : 'Drafting with AI…'}
               </>
             ) : (
-              <>✨ Draft with AI</>
+              <>{trimmed.length > 0 ? '✨ Improve with AI' : '✨ Draft with AI'}</>
             )}
           </button>
           {!valueId && (
             <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 5, textAlign: 'center' }}>
               Select a company value first to enable AI drafting
+            </div>
+          )}
+          {aiDraftError && (
+            <div style={{
+              fontSize: 12, color: '#dc2626', marginTop: 6, padding: '6px 10px',
+              background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6,
+            }}>
+              ✗ {aiDraftError}
             </div>
           )}
         </div>
@@ -350,7 +488,7 @@ function ComposeStep({
             value={message}
             onChange={e => setMessage(e.target.value)}
             maxLength={MSG_MAX}
-            placeholder={`Tell ${employee.firstName} why they're being recognized… (minimum ${MSG_MIN} characters)`}
+            placeholder={`Tell ${employee?.firstName ?? 'them'} why they're being recognized… (minimum ${MSG_MIN} characters)`}
             style={{
               ...inputStyle,
               flex: 1,
@@ -408,7 +546,9 @@ function ComposeStep({
         </button>
         {!canProceed && (
           <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', marginTop: -12 }}>
-            {!valueId
+            {!employee
+              ? 'Select a recipient to continue'
+              : !valueId
               ? 'Select a company value to continue'
               : `${charsToMin} more characters needed (min ${MSG_MIN})`}
           </div>
@@ -429,16 +569,25 @@ function ComposeStep({
         <div style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
           Live preview
         </div>
-        <GiftCardPreview
-          employeeFirstName={employee.firstName}
-          managerFirstName={managerFirstName}
-          reason={selectedValue ? `${selectedValue.emoji} ${selectedValue.label}` : ''}
-          message={message}
-          amountCents={AMOUNT_CENTS}
-        />
-        <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', lineHeight: 1.5 }}>
-          This is what {employee.firstName} will receive by email — redeemable at 60,000+ merchants.
-        </div>
+        {employee && (
+          <>
+            <GiftCardPreview
+              employeeFirstName={employee.firstName}
+              managerFirstName={managerFirstName}
+              reason={selectedValue ? `${selectedValue.emoji} ${selectedValue.label}` : ''}
+              message={message}
+              amountCents={AMOUNT_CENTS}
+            />
+            <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', lineHeight: 1.5 }}>
+              This is what {employee.firstName} will receive by email — redeemable at 60,000+ merchants.
+            </div>
+          </>
+        )}
+        {!employee && (
+          <div style={{ fontSize: 13, color: '#94a3b8', textAlign: 'center', lineHeight: 1.6 }}>
+            Select a recipient to see the live preview
+          </div>
+        )}
       </div>
     </div>
   );
@@ -454,6 +603,7 @@ interface ConfirmStepProps {
   valueLabel: string;
   message: string;
   visibility: Visibility;
+  includeReward: boolean;
   isSubmitting: boolean;
   submitError: string | null;
   onBack: () => void;
@@ -472,6 +622,7 @@ function ConfirmStep({
   valueLabel,
   message,
   visibility,
+  includeReward,
   isSubmitting,
   submitError,
   onBack,
@@ -558,8 +709,14 @@ function ConfirmStep({
             <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>
               Reward
             </div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: '#1e293b' }}>$25 USD</div>
-            <div style={{ fontSize: 12, color: '#94a3b8' }}>Guusto Gift Card · 60,000+ merchants</div>
+            {includeReward ? (
+              <>
+                <div style={{ fontSize: 22, fontWeight: 800, color: '#1e293b' }}>$25 USD</div>
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>Guusto Gift Card · 60,000+ merchants</div>
+              </>
+            ) : (
+              <div style={{ fontSize: 14, color: '#64748b' }}>Recognition only (no gift card)</div>
+            )}
           </div>
           <div style={{ fontSize: 13, color: '#64748b' }}>
             From: <strong>{managerFirstName}</strong>
@@ -648,7 +805,7 @@ function ConfirmStep({
               Sending…
             </>
           ) : (
-            submitError ? 'Retry →' : 'Send Recognition & $25 Reward 🎁'
+            submitError ? 'Retry →' : includeReward ? 'Send Recognition & $25 Reward 🎁' : 'Send Recognition 🎉'
           )}
         </button>
       </div>
@@ -815,20 +972,25 @@ function SuccessStep({ employee, deliveryStatus, shoutoutId, onClose }: SuccessS
 // ---------------------------------------------------------------------------
 
 export function RecognizeDrawer({
-  employee,
+  employee: employeeProp = null,
+  employees = [],
+  availableBudgetCents = 0,
   managerFirstName = 'Manager',
   senderId = 'mgr_001',
   onClose,
 }: RecognizeDrawerProps) {
   const [step, setStep] = useState<Step>('compose');
+  const [selectedEmployee, setSelectedEmployee] = useState<EmployeeProfile | null>(employeeProp);
   const [valueId, setValueId] = useState('');
   const [message, setMessage] = useState('');
   const [visibility, setVisibility] = useState<Visibility>('company');
+  const [includeReward, setIncludeReward] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [deliveryStatus, setDeliveryStatus] = useState<DeliveryStatus>('delivered');
   const [shoutoutId, setShoutoutId] = useState<string | null>(null);
   const [aiDrafting, setAiDrafting] = useState(false);
+  const [aiDraftError, setAiDraftError] = useState<string | null>(null);
 
   // Company values from API
   const [companyValues, setCompanyValues] = useState<CompanyValue[]>([]);
@@ -882,21 +1044,28 @@ export function RecognizeDrawer({
   const handleAiDraft = async () => {
     if (!valueId || aiDrafting) return;
     setAiDrafting(true);
+    setAiDraftError(null);
     try {
       const res = await fetch('http://localhost:3001/api/rr/ai/draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          recipientName: `${employee.firstName} ${employee.lastName}`,
+          recipientName: selectedEmployee ? `${selectedEmployee.firstName} ${selectedEmployee.lastName}` : 'them',
           valueLabel: selectedValue ? selectedValue.label : '',
+          existingDraft: message.trim() || undefined,
         }),
       });
-      if (res.ok) {
-        const d = await res.json() as { draft: string };
+      const d = await res.json() as { draft?: string; error?: string };
+      if (res.ok && d.draft) {
         setMessage(d.draft);
+      } else {
+        setAiDraftError(d.error ?? 'AI draft failed — please write manually.');
       }
-    } catch {/* silent — user can still write manually */}
-    finally { setAiDrafting(false); }
+    } catch {
+      setAiDraftError('Could not reach the AI service. Please write manually.');
+    } finally {
+      setAiDrafting(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -911,11 +1080,11 @@ export function RecognizeDrawer({
           'x-user-role': 'manager',
         },
         body: JSON.stringify({
-          recipientId: employee.id,
+          recipientId: selectedEmployee!.id,
           message: message.trim(),
           valueIds: [valueId],
           visibility,
-          giftAmountCents: AMOUNT_CENTS,
+          giftAmountCents: includeReward ? AMOUNT_CENTS : 0,
         }),
       });
 
@@ -986,12 +1155,12 @@ export function RecognizeDrawer({
           flexShrink: 0,
         }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#1e293b' }}>
-              Recognize {employee.firstName} ✨
-            </h2>
-            {step !== 'success' && (
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#1e293b' }}>
+              Send Recognition
+            </h1>
+            {step !== 'success' && selectedEmployee && (
               <p style={{ margin: '2px 0 0', fontSize: 13, color: '#94a3b8' }}>
-                {employee.title} · {employee.department}
+                {selectedEmployee.title} · {selectedEmployee.department}
               </p>
             )}
           </div>
@@ -1048,8 +1217,14 @@ export function RecognizeDrawer({
         {/* Step content */}
         {step === 'compose' && (
           <ComposeStep
-            employee={employee}
+            employee={selectedEmployee}
+            employees={employees}
+            onSelectEmployee={emp => setSelectedEmployee(emp)}
             managerFirstName={managerFirstName}
+            availableBudgetCents={availableBudgetCents}
+            includeReward={includeReward}
+            setIncludeReward={setIncludeReward}
+            pastRewards={(employees.find(e => e.id === selectedEmployee?.id) as DirectReport | undefined)?.recognitionHistory ?? []}
             companyValues={companyValues}
             valuesLoading={valuesLoading}
             valueId={valueId}
@@ -1062,24 +1237,26 @@ export function RecognizeDrawer({
             onNext={() => setStep('confirm')}
             onAiDraft={handleAiDraft}
             aiDrafting={aiDrafting}
+            aiDraftError={aiDraftError}
           />
         )}
-        {step === 'confirm' && (
+        {step === 'confirm' && selectedEmployee && (
           <ConfirmStep
-            employee={employee}
+            employee={selectedEmployee}
             managerFirstName={managerFirstName}
             valueLabel={valueLabel}
             message={message}
             visibility={visibility}
+            includeReward={includeReward}
             isSubmitting={isSubmitting}
             submitError={submitError}
             onBack={() => { setStep('compose'); setSubmitError(null); }}
             onSubmit={handleSubmit}
           />
         )}
-        {step === 'success' && (
+        {step === 'success' && selectedEmployee && (
           <SuccessStep
-            employee={employee}
+            employee={selectedEmployee}
             deliveryStatus={deliveryStatus}
             shoutoutId={shoutoutId}
             onClose={onClose}

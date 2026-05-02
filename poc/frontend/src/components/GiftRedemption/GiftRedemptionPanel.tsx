@@ -57,7 +57,7 @@ function GuustoEmbed({ url, onResult }: { url: string; onResult: (blocked: boole
     const timer = setTimeout(() => {
       try {
         // Cross-origin access throws — means it loaded (different origin, not blocked)
-        const _ = iframe.contentDocument;
+        void iframe.contentDocument;
         // If accessible and empty, it was likely blocked by CSP
         setBlocked(true);
         onResult(true);
@@ -111,7 +111,7 @@ function GuustoEmbed({ url, onResult }: { url: string; onResult: (blocked: boole
 // Gift card
 // ---------------------------------------------------------------------------
 
-function GiftCard({ gift, employeeId }: { gift: Gift; employeeId: string }) {
+function GiftCard({ gift }: { gift: Gift }) {
   const [embedState, setEmbedState] = useState<EmbedState>('idle');
 
   const handleRedeem = () => {
@@ -329,7 +329,7 @@ export function GiftRedemptionPanel({ employeeId }: { employeeId: string }) {
         redemption works today.
       </div>
       {gifts.map(gift => (
-        <GiftCard key={gift.orderId} gift={gift} employeeId={employeeId} />
+        <GiftCard key={gift.orderId} gift={gift} />
       ))}
     </div>
   );
