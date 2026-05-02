@@ -48,7 +48,9 @@ export function EmployeesListPage() {
         }}>
           <option>All departments</option>
           <option>Customer Success</option>
-          <option>Enterprise CS</option>
+          <option>Engineering</option>
+          <option>Sales</option>
+          <option>People Operations</option>
         </select>
         <select style={{
           border: '1px solid #e5e7eb', borderRadius: 6,
@@ -56,8 +58,10 @@ export function EmployeesListPage() {
           background: '#fff', cursor: 'pointer',
         }}>
           <option>All managers</option>
-          <option>Sarah Chen</option>
-          <option>David Park</option>
+          <option>Rachael Alpert</option>
+          <option>David Almeida</option>
+          <option>Thomas Badeen</option>
+          <option>Abigail Anderson</option>
         </select>
       </div>
 

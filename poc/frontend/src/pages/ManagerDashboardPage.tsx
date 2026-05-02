@@ -16,8 +16,10 @@
  *   P1–P4 Manager user stories
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+
+const API = 'http://localhost:3001';
 import {
   PageHeader,
   Card,
@@ -69,8 +71,8 @@ function formatDate(iso: string): string {
 // ---------------------------------------------------------------------------
 
 const MANAGER_OPTIONS: { value: string; label: string; manager: ManagerProfile }[] = [
-  { value: 'mgr_001', label: 'Sarah Chen — VP Customer Success', manager: MANAGER },
-  { value: 'mgr_003', label: 'Luis Morales — Store Manager (Frontline)', manager: FRONTLINE_MANAGER },
+  { value: 'mgr_001', label: 'Rachael Alpert — VP Customer Success', manager: MANAGER },
+  { value: 'mgr_003', label: 'Thomas Badeen — Sales Manager', manager: FRONTLINE_MANAGER },
 ];
 
 interface ManagerSwitcherProps {
@@ -112,8 +114,8 @@ function ManagerSwitcher({ selectedId, onChange }: ManagerSwitcherProps) {
       </select>
       {selected.value === 'mgr_003' && (
         <span style={{
-          background: 'var(--mantine-color-pink-1)',
-          color: 'var(--mantine-color-pink-7)',
+          background: 'var(--mantine-color-orange-1)',
+          color: 'var(--mantine-color-orange-7)',
           fontSize: 11,
           fontWeight: 700,
           padding: '2px 8px',
@@ -122,7 +124,7 @@ function ManagerSwitcher({ selectedId, onChange }: ManagerSwitcherProps) {
           textTransform: 'uppercase',
           flexShrink: 0,
         }}>
-          Frontline demo
+          Sales team
         </span>
       )}
     </div>
@@ -133,9 +135,9 @@ function ManagerSwitcher({ selectedId, onChange }: ManagerSwitcherProps) {
 // Budget panel
 // ---------------------------------------------------------------------------
 
-function BudgetPanel({ manager }: { manager: ManagerProfile }) {
+function BudgetPanel({ manager, liveLedger }: { manager: ManagerProfile; liveLedger: LedgerEntry[] | null }) {
   const { budgetAllocatedCents, budgetSpentCents, budgetPeriodLabel, budgetWeeksRemaining, directReports } = manager;
-  const pct = Math.round((budgetSpentCents / budgetAllocatedCents) * 100);
+  const pct = budgetAllocatedCents > 0 ? Math.round((budgetSpentCents / budgetAllocatedCents) * 100) : 0;
   const remaining = budgetAllocatedCents - budgetSpentCents;
   const recognizedCount = directReports.filter(r => r.recognitionsThisQuarter > 0).length;
   const totalReports = directReports.length;
@@ -193,12 +195,65 @@ function BudgetPanel({ manager }: { manager: ManagerProfile }) {
             Transaction history
           </div>
         </div>
-        {directReports.flatMap(r => r.recognitionHistory).length === 0 ? (
-          <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--mantine-color-gray-5)', fontSize: 14 }}>
-            No rewards sent yet this quarter.
-          </div>
-        ) : (
-          directReports.flatMap(r =>
+        {(() => {
+          // Use live ledger if available; fall back to static recognitionHistory
+          if (liveLedger !== null) {
+            const debits = liveLedger.filter(e => e.entryType === 'debit' && e.amountCents < 0);
+            const allocs = liveLedger.filter(e => e.entryType === 'allocation');
+            const entries = [...debits, ...allocs].sort(
+              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
+            if (entries.length === 0) {
+              return (
+                <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--mantine-color-gray-5)', fontSize: 14 }}>
+                  No transactions yet this quarter.
+                </div>
+              );
+            }
+            return entries.map(e => (
+              <div key={e.id} style={{
+                display: 'flex', alignItems: 'center', gap: 14,
+                padding: '14px 20px',
+                borderBottom: '1px solid var(--mantine-color-gray-1)',
+              }}>
+                <div style={{
+                  width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                  background: e.entryType === 'allocation' ? '#d1fae5' : '#dbeafe',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 16,
+                }}>
+                  {e.entryType === 'allocation' ? '💰' : '🎁'}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--mantine-color-gray-8)' }}>
+                    {e.entryType === 'allocation' ? 'Budget allocation' : 'Gift reward sent'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--mantine-color-gray-5)', marginTop: 1 }}>
+                    {e.note ?? e.referenceId ?? '—'} · {formatDate(e.createdAt)}
+                  </div>
+                </div>
+                <div style={{
+                  fontSize: 15, fontWeight: 700,
+                  color: e.amountCents > 0 ? 'var(--mantine-color-green-7)' : 'var(--mantine-color-blue-7)',
+                }}>
+                  {e.amountCents > 0 ? '+' : ''}{formatCents(Math.abs(e.amountCents))}
+                </div>
+                <Badge color={e.entryType === 'allocation' ? 'blue' : 'success'} variant="light" size="sm">
+                  {e.entryType === 'allocation' ? 'Allocated' : 'Delivered'}
+                </Badge>
+              </div>
+            ));
+          }
+          // Static fallback (no live data yet)
+          const staticTxs = directReports.flatMap(r => r.recognitionHistory);
+          if (staticTxs.length === 0) {
+            return (
+              <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--mantine-color-gray-5)', fontSize: 14 }}>
+                No rewards sent yet this quarter.
+              </div>
+            );
+          }
+          return directReports.flatMap(r =>
             r.recognitionHistory.map(h => ({ ...h, employee: r }))
           ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
           .map(tx => (
@@ -223,8 +278,8 @@ function BudgetPanel({ manager }: { manager: ManagerProfile }) {
               </div>
               <Badge color="success" variant="light" size="sm">Delivered</Badge>
             </div>
-          ))
-        )}
+          ));
+        })()}
       </Card>
     </div>
   );
@@ -390,21 +445,91 @@ const TABS: NavigationTabItem[] = [
   { value: 'budget',  label: 'Budget' },
 ];
 
+// Live team data from /api/rr/manager/team
+interface LiveTeamData {
+  budget: { balanceCents: number; giftsIssuedCents: number };
+  directReports: Array<{
+    employeeId: string;
+    daysSinceLastRecognized: number | null;
+    recognitionsReceived: number;
+    flagged: boolean;
+  }>;
+}
+
+// Live ledger from /api/rr/manager/budget
+interface LedgerEntry {
+  id: string;
+  amountCents: number;
+  amountDollars: string;
+  entryType: string; // 'allocation'|'debit'|'rollback'|'expiry'
+  referenceId: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
 export function ManagerDashboardPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('team');
   const [selectedManagerId, setSelectedManagerId] = useState('mgr_001');
+  const [recognizeOpen, setRecognizeOpen] = useState(false);
   const [recognizeTarget, setRecognizeTarget] = useState<EmployeeProfile | null>(null);
+  const [liveData, setLiveData] = useState<LiveTeamData | null>(null);
+  const [liveLedger, setLiveLedger] = useState<LedgerEntry[] | null>(null);
 
-  const manager = MANAGER_OPTIONS.find(o => o.value === selectedManagerId)!.manager;
+  // Fetch live team data and ledger whenever manager changes
+  useEffect(() => {
+    setLiveData(null);
+    setLiveLedger(null);
+    const headers = { 'x-user-id': selectedManagerId, 'x-user-role': 'manager' };
+
+    fetch(`${API}/api/rr/manager/team`, { headers })
+      .then(r => r.json())
+      .then((d: { budget?: LiveTeamData['budget']; directReports?: LiveTeamData['directReports'] }) => {
+        if (d.budget && d.directReports) {
+          setLiveData({ budget: d.budget, directReports: d.directReports });
+        }
+      })
+      .catch(() => {/* use static fallback */});
+
+    fetch(`${API}/api/rr/manager/budget`, { headers })
+      .then(r => r.json())
+      .then((d: { ledger?: LedgerEntry[] }) => {
+        if (d.ledger) setLiveLedger(d.ledger);
+      })
+      .catch(() => {});
+  }, [selectedManagerId]);
+
+  const staticManager = MANAGER_OPTIONS.find(o => o.value === selectedManagerId)!.manager;
+
+  // Merge live data over static stub — live wins where available
+  const manager: ManagerProfile = {
+    ...staticManager,
+    budgetAllocatedCents: liveData
+      ? liveData.budget.balanceCents + liveData.budget.giftsIssuedCents
+      : staticManager.budgetAllocatedCents,
+    budgetSpentCents: liveData
+      ? liveData.budget.giftsIssuedCents
+      : staticManager.budgetSpentCents,
+    directReports: staticManager.directReports.map(report => {
+      const live = liveData?.directReports.find(d => d.employeeId === report.id);
+      if (!live) return report;
+      return {
+        ...report,
+        lastRecognizedDaysAgo: live.daysSinceLastRecognized,
+        recognitionsThisQuarter: live.recognitionsReceived,
+      };
+    }),
+  };
 
   const overdueReports = manager.directReports.filter(
     r => r.lastRecognizedDaysAgo === null || r.lastRecognizedDaysAgo > OVERDUE_THRESHOLD
   );
 
-  const budgetPctLeft = Math.round(
-    ((manager.budgetAllocatedCents - manager.budgetSpentCents) / manager.budgetAllocatedCents) * 100
-  );
+  const budgetPctLeft = manager.budgetAllocatedCents > 0
+    ? Math.round(
+        ((manager.budgetAllocatedCents - manager.budgetSpentCents) / manager.budgetAllocatedCents) * 100
+      )
+    : 100;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -415,14 +540,14 @@ export function ManagerDashboardPage() {
           <Badge key="budget" color={budgetPctLeft > 40 ? 'success' : 'warning'} variant="light">
             {formatCents(manager.budgetAllocatedCents - manager.budgetSpentCents)} budget remaining
           </Badge>,
-          <Button key="recognize" variant="primary" onClick={() => setRecognizeTarget(manager.directReports[0])}>
+          <Button key="recognize" variant="primary" onClick={() => { setRecognizeTarget(null); setRecognizeOpen(true); }}>
             Recognize someone ✨
           </Button>,
         ]}
       />
 
       {/* Manager switcher — demo aid to switch between corporate and frontline manager */}
-      <ManagerSwitcher selectedId={selectedManagerId} onChange={id => { setSelectedManagerId(id); setRecognizeTarget(null); }} />
+      <ManagerSwitcher selectedId={selectedManagerId} onChange={id => { setSelectedManagerId(id); setRecognizeTarget(null); setRecognizeOpen(false); }} />
 
       {/* Equity gap alert — fires when any direct report is overdue */}
       {overdueReports.length > 0 && (
@@ -495,14 +620,16 @@ export function ManagerDashboardPage() {
       )}
 
       {activeTab === 'history' && <HistoryPanel manager={manager} />}
-      {activeTab === 'budget' && <BudgetPanel manager={manager} />}
+      {activeTab === 'budget' && <BudgetPanel manager={manager} liveLedger={liveLedger} />}
 
       {/* Recognize drawer */}
-      {recognizeTarget && (
+      {(recognizeOpen || recognizeTarget) && (
         <RecognizeDrawer
           employee={recognizeTarget}
+          employees={manager.directReports}
+          availableBudgetCents={manager.budgetAllocatedCents - manager.budgetSpentCents}
           managerFirstName={manager.firstName}
-          onClose={() => setRecognizeTarget(null)}
+          onClose={() => { setRecognizeTarget(null); setRecognizeOpen(false); }}
         />
       )}
     </div>

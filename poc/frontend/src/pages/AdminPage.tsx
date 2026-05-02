@@ -104,6 +104,16 @@ interface OrgSummary {
   utilizationPct: string;
 }
 
+interface GuustoWorkspace {
+  balanceCents: number | null;
+  balanceDollars: string | null;
+  alertThresholdCents: number;
+  alertThresholdDollars: string;
+  isLow: boolean;
+  checkedAt: string | null;
+  live: boolean;
+}
+
 interface ReportSummary {
   period: { days: number; since: string };
   shoutouts: {
@@ -716,7 +726,7 @@ function SetupTab() {
 // ---------------------------------------------------------------------------
 
 function BudgetTab() {
-  const [data, setData] = useState<{ managers: ManagerBalance[]; orgSummary: OrgSummary } | null>(null);
+  const [data, setData] = useState<{ managers: ManagerBalance[]; orgSummary: OrgSummary; guustoWorkspace?: GuustoWorkspace } | null>(null);
   const [loading, setLoading] = useState(true);
   const [allocatingId, setAllocatingId] = useState<string | null>(null);
   const [allocAmount, setAllocAmount] = useState('');
@@ -727,7 +737,7 @@ function BudgetTab() {
   const load = useCallback(async () => {
     setLoading(true);
     const r = await fetch(`${API}/api/rr/admin/budget`, { headers: ADMIN_GET_HEADERS });
-    const d = await r.json() as { managers: ManagerBalance[]; orgSummary: OrgSummary };
+    const d = await r.json() as { managers: ManagerBalance[]; orgSummary: OrgSummary; guustoWorkspace?: GuustoWorkspace };
     setData(d);
     setLoading(false);
   }, []);
@@ -787,6 +797,76 @@ function BudgetTab() {
           </div>
         </Card>
       )}
+
+      {/* Guusto Workspace Balance */}
+      {data?.guustoWorkspace && (() => {
+        const ws = data.guustoWorkspace!;
+        const checkedAgo = ws.checkedAt
+          ? Math.round((Date.now() - new Date(ws.checkedAt).getTime()) / 60000)
+          : null;
+        return (
+          <Card>
+            <div style={{ padding: '20px 24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={sectionLabel}>Guusto Workspace Balance</div>
+                {ws.isLow && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '5px 12px', borderRadius: 20,
+                    background: '#fef2f2', border: '1px solid #fecaca',
+                    fontSize: 12, fontWeight: 700, color: '#dc2626',
+                  }}>
+                    ⚠ Low Balance — Top up Guusto workspace
+                  </div>
+                )}
+                {!ws.isLow && ws.balanceCents !== null && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '5px 12px', borderRadius: 20,
+                    background: '#f0fdf4', border: '1px solid #bbf7d0',
+                    fontSize: 12, fontWeight: 700, color: '#16a34a',
+                  }}>
+                    ✓ Funded
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 40, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--mantine-color-gray-5)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4 }}>
+                    Workspace Balance
+                  </div>
+                  <div style={{
+                    fontSize: 32, fontWeight: 800,
+                    color: ws.isLow ? '#dc2626' : ws.balanceCents !== null ? 'var(--mantine-color-green-7)' : 'var(--mantine-color-gray-4)',
+                  }}>
+                    {ws.balanceDollars !== null ? `$${ws.balanceDollars}` : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--mantine-color-gray-5)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4 }}>
+                    Alert Threshold
+                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--mantine-color-gray-6)' }}>
+                    ${ws.alertThresholdDollars}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--mantine-color-gray-5)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 4 }}>
+                    Last Checked
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--mantine-color-gray-6)' }}>
+                    {checkedAgo === null ? '—' : checkedAgo === 0 ? 'Just now' : `${checkedAgo}m ago`}
+                    {!ws.live && <span style={{ marginLeft: 6, fontSize: 11, color: '#f59e0b' }}>(cached)</span>}
+                  </div>
+                </div>
+              </div>
+              <div style={{ marginTop: 12, fontSize: 12, color: 'var(--mantine-color-gray-5)' }}>
+                This balance covers all Guusto gift cards sent across all managers. Checked live on each page load and hourly by the server.
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* Per-manager table */}
       <Card>
@@ -1206,9 +1286,9 @@ function AuditTab() {
 // ---------------------------------------------------------------------------
 
 function SlackTab() {
-  const [senderName, setSenderName] = useState('Sarah Park');
-  const [recipientName, setRecipientName] = useState('Carmen Rodriguez');
-  const [message, setMessage] = useState('Carmen absolutely crushed it this weekend — she helped 12 customers in a row, each one leaving with a smile. Her patience and product knowledge are unmatched. The team is lucky to have her.');
+  const [senderName, setSenderName] = useState('Rachael Alpert');
+  const [recipientName, setRecipientName] = useState('Samuel Abramsky');
+  const [message, setMessage] = useState('Samuel absolutely crushed it this week — he handled 12 escalations in a row, each customer leaving satisfied. His patience and product knowledge are unmatched. The team is lucky to have him.');
   const [valueLabel, setValueLabel] = useState('Customer Focus');
   const [valueEmoji, setValueEmoji] = useState('🤝');
   const [giftCents, setGiftCents] = useState(2500);
@@ -1436,15 +1516,723 @@ function SlackTab() {
 }
 
 // ---------------------------------------------------------------------------
+// TAB 6 — Automations: AI-powered R&R workflow builder
+// ---------------------------------------------------------------------------
+
+type TriggerType = 'gong' | 'crm_deal' | 'hris_event' | 'slack_command';
+type IntegrationStatus = 'connected' | 'needs_setup' | 'unknown';
+type Visibility = 'company' | 'team' | 'private';
+
+interface AutomationTrigger {
+  type: TriggerType;
+  label: string;
+  integrationStatus?: IntegrationStatus;
+  integrationRequired?: string;
+  conditions?: string[];
+}
+
+interface AutomationBusinessRules {
+  requireManagerApproval: boolean;
+  recognitionEnabled: boolean;
+  recognitionVisibility: Visibility;
+  rewardEnabled: boolean;
+  rewardAmountCents?: number;
+  frequencyLimit?: string;
+}
+
+interface AutomationSpec {
+  name?: string;
+  description?: string;
+  trigger?: AutomationTrigger;
+  businessRules?: AutomationBusinessRules;
+  ready?: boolean;
+}
+
+interface AutomationRule {
+  id: string;
+  name: string;
+  description: string | null;
+  triggerType: TriggerType;
+  triggerConfig: Record<string, unknown>;
+  conditions: string[];
+  requireManagerApproval: boolean;
+  recognitionEnabled: boolean;
+  recognitionVisibility: Visibility;
+  rewardEnabled: boolean;
+  rewardAmountCents: number | null;
+  frequencyLimit: string | null;
+  status: 'active' | 'paused' | 'draft';
+  createdAt: string;
+}
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+const TRIGGER_META: Record<TriggerType, { icon: string; label: string; color: string }> = {
+  gong:           { icon: '🎙️', label: 'Gong',         color: '#7c3aed' },
+  crm_deal:       { icon: '💼', label: 'CRM Deal',     color: '#0369a1' },
+  hris_event:     { icon: '👤', label: 'HRIS Event',   color: '#065f46' },
+  slack_command:  { icon: '💬', label: 'Slack',        color: '#4a154b' },
+};
+
+const VISIBILITY_LABEL: Record<Visibility, string> = {
+  company: '🌐 Company-wide',
+  team:    '👥 Team only',
+  private: '🔒 Private',
+};
+
+// ---- Spec preview card ----
+
+function SpecPreviewCard({ spec }: { spec: AutomationSpec }) {
+  const empty = !spec.name && !spec.trigger && !spec.businessRules;
+
+  return (
+    <div style={{
+      background: '#fff',
+      border: '1px solid var(--mantine-color-gray-2)',
+      borderRadius: 12,
+      overflow: 'hidden',
+      position: 'sticky',
+      top: 0,
+    }}>
+      <div style={{
+        padding: '14px 18px',
+        background: 'var(--mantine-color-gray-0)',
+        borderBottom: '1px solid var(--mantine-color-gray-2)',
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--mantine-color-gray-7)' }}>
+          Automation preview
+        </span>
+        {spec.ready && (
+          <span style={{
+            fontSize: 11, fontWeight: 700, color: '#166534',
+            background: '#dcfce7', padding: '2px 8px', borderRadius: 20,
+          }}>
+            Ready to save
+          </span>
+        )}
+      </div>
+
+      {empty ? (
+        <div style={{ padding: '40px 24px', textAlign: 'center' }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>🤖</div>
+          <div style={{ fontSize: 13, color: 'var(--mantine-color-gray-5)', lineHeight: 1.6 }}>
+            Describe your goal in the chat and your automation rule will take shape here.
+          </div>
+        </div>
+      ) : (
+        <div style={{ padding: '20px 18px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+          {/* Name */}
+          {spec.name && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--mantine-color-gray-4)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>Name</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--mantine-color-gray-9)' }}>{spec.name}</div>
+              {spec.description && (
+                <div style={{ fontSize: 12, color: 'var(--mantine-color-gray-5)', marginTop: 3, lineHeight: 1.5 }}>{spec.description}</div>
+              )}
+            </div>
+          )}
+
+          {/* Trigger */}
+          {spec.trigger && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--mantine-color-gray-4)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>Trigger</div>
+              <div style={{
+                padding: '12px 14px', borderRadius: 8,
+                background: `${TRIGGER_META[spec.trigger.type]?.color}12`,
+                border: `1px solid ${TRIGGER_META[spec.trigger.type]?.color}30`,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 16 }}>{TRIGGER_META[spec.trigger.type]?.icon}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: TRIGGER_META[spec.trigger.type]?.color }}>
+                    {spec.trigger.label}
+                  </span>
+                  {spec.trigger.integrationStatus && (
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20,
+                      background: spec.trigger.integrationStatus === 'connected' ? '#dcfce7' : '#fef3c7',
+                      color: spec.trigger.integrationStatus === 'connected' ? '#166534' : '#92400e',
+                    }}>
+                      {spec.trigger.integrationStatus === 'connected' ? '✓ Connected' : '⚡ Setup needed'}
+                    </span>
+                  )}
+                </div>
+                {spec.trigger.conditions && spec.trigger.conditions.length > 0 && (
+                  <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {spec.trigger.conditions.map((c, i) => (
+                      <li key={i} style={{ fontSize: 12, color: 'var(--mantine-color-gray-6)', lineHeight: 1.5 }}>{c}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {spec.trigger.integrationRequired && spec.trigger.integrationStatus !== 'connected' && (
+                <div style={{ marginTop: 6, fontSize: 11, color: '#92400e', background: '#fef3c7', padding: '6px 10px', borderRadius: 6 }}>
+                  ⚡ {spec.trigger.integrationRequired}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Business rules */}
+          {spec.businessRules && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--mantine-color-gray-4)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>Rules</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[
+                  {
+                    icon: '✅',
+                    label: 'Manager approval',
+                    value: spec.businessRules.requireManagerApproval ? 'Required' : 'Auto-send',
+                    color: spec.businessRules.requireManagerApproval ? '#166534' : '#0369a1',
+                  },
+                  {
+                    icon: '📣',
+                    label: 'Recognition',
+                    value: spec.businessRules.recognitionEnabled
+                      ? VISIBILITY_LABEL[spec.businessRules.recognitionVisibility]
+                      : 'Disabled',
+                    color: spec.businessRules.recognitionEnabled ? '#0369a1' : '#6b7280',
+                  },
+                  ...(spec.businessRules.rewardEnabled ? [{
+                    icon: '🎁',
+                    label: 'Guusto gift card',
+                    value: spec.businessRules.rewardAmountCents
+                      ? `$${(spec.businessRules.rewardAmountCents / 100).toFixed(0)}`
+                      : 'Amount TBD',
+                    color: '#7c3aed',
+                  }] : []),
+                  ...(spec.businessRules.frequencyLimit ? [{
+                    icon: '🔁',
+                    label: 'Frequency',
+                    value: spec.businessRules.frequencyLimit,
+                    color: '#374151',
+                  }] : []),
+                ].map(row => (
+                  <div key={row.label} style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '8px 12px', borderRadius: 7,
+                    background: 'var(--mantine-color-gray-0)',
+                    border: '1px solid var(--mantine-color-gray-1)',
+                  }}>
+                    <span style={{ fontSize: 14, flexShrink: 0 }}>{row.icon}</span>
+                    <span style={{ fontSize: 12, color: 'var(--mantine-color-gray-5)', flex: 1 }}>{row.label}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: row.color }}>{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Rule list card ----
+
+function AutomationRuleCard({
+  rule,
+  onToggle,
+}: {
+  rule: AutomationRule;
+  onToggle: (id: string, status: 'active' | 'paused') => void;
+}) {
+  const meta = TRIGGER_META[rule.triggerType] ?? { icon: '⚙️', label: rule.triggerType, color: '#6b7280' };
+  const isActive = rule.status === 'active';
+  const integrationStatus = (rule.triggerConfig['integrationStatus'] as string) ?? 'unknown';
+
+  return (
+    <div style={{
+      background: '#fff',
+      border: `1px solid ${isActive ? 'var(--mantine-color-gray-2)' : 'var(--mantine-color-gray-1)'}`,
+      borderRadius: 10,
+      overflow: 'hidden',
+      opacity: isActive ? 1 : 0.75,
+    }}>
+      <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+        {/* Trigger icon */}
+        <div style={{
+          width: 44, height: 44, borderRadius: 10, flexShrink: 0,
+          background: `${meta.color}15`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 20,
+        }}>
+          {meta.icon}
+        </div>
+
+        {/* Body */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--mantine-color-gray-9)' }}>
+              {rule.name}
+            </div>
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20,
+              background: isActive ? '#dcfce7' : '#f3f4f6',
+              color: isActive ? '#166534' : '#6b7280',
+            }}>
+              {isActive ? '● Active' : '○ Paused'}
+            </span>
+            {integrationStatus === 'needs_setup' && (
+              <span style={{
+                fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20,
+                background: '#fef3c7', color: '#92400e',
+              }}>
+                ⚡ Setup needed
+              </span>
+            )}
+          </div>
+          {rule.description && (
+            <div style={{ fontSize: 12, color: 'var(--mantine-color-gray-5)', marginTop: 4, lineHeight: 1.5 }}>
+              {rule.description}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: meta.color, fontWeight: 600 }}>
+              {meta.icon} {meta.label}
+            </span>
+            {rule.requireManagerApproval && (
+              <span style={{ fontSize: 11, color: 'var(--mantine-color-gray-5)' }}>✅ Manager approval</span>
+            )}
+            {rule.rewardEnabled && rule.rewardAmountCents && (
+              <span style={{ fontSize: 11, color: '#7c3aed', fontWeight: 600 }}>
+                🎁 ${(rule.rewardAmountCents / 100).toFixed(0)} gift card
+              </span>
+            )}
+            {rule.frequencyLimit && (
+              <span style={{ fontSize: 11, color: 'var(--mantine-color-gray-4)' }}>🔁 {rule.frequencyLimit}</span>
+            )}
+          </div>
+          {rule.conditions.length > 0 && (
+            <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {rule.conditions.map((c, i) => (
+                <span key={i} style={{
+                  fontSize: 10, padding: '2px 8px', borderRadius: 20,
+                  background: 'var(--mantine-color-gray-0)',
+                  border: '1px solid var(--mantine-color-gray-2)',
+                  color: 'var(--mantine-color-gray-6)',
+                }}>
+                  {c}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Toggle */}
+        <button
+          onClick={() => onToggle(rule.id, isActive ? 'paused' : 'active')}
+          style={{
+            padding: '6px 14px', borderRadius: 6, border: 'none',
+            background: isActive ? '#fef2f2' : '#f0fdf4',
+            color: isActive ? '#b91c1c' : '#166534',
+            fontSize: 12, fontWeight: 600, cursor: 'pointer', flexShrink: 0,
+          }}
+        >
+          {isActive ? 'Pause' : 'Activate'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---- Chat builder ----
+
+const STARTER_PROMPTS = [
+  'Recognize employees praised by name on Gong customer calls',
+  'Reward salespeople who close 3 deals in a row',
+  'Celebrate work anniversaries with a shoutout and gift card',
+  'Auto-recognize when a manager uses /recognize on Slack',
+];
+
+function AutomationBuilder({
+  onSaved,
+  onCancel,
+}: {
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      role: 'assistant',
+      content: "Hi! I'll help you set up an automated recognition workflow. Describe your goal in plain English — for example: *\"Recognize employees who get praised by name in Gong customer calls\"* — and I'll ask a few follow-up questions to configure the details.",
+    },
+  ]);
+  const [input, setInput] = useState('');
+  const [spec, setSpec] = useState<AutomationSpec>({});
+  const [isComplete, setIsComplete] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
+  const chatEndRef = { current: null as HTMLDivElement | null };
+
+  const scrollToBottom = () => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const sendMessage = async (text: string) => {
+    if (!text.trim() || loading) return;
+
+    const userMsg: ChatMessage = { role: 'user', content: text.trim() };
+    const nextMessages = [...messages, userMsg];
+    setMessages(nextMessages);
+    setInput('');
+    setLoading(true);
+
+    // Only send actual conversation turns (skip the seeded assistant greeting)
+    const apiMessages = nextMessages.filter(m => !(m.role === 'assistant' && nextMessages.indexOf(m) === 0));
+
+    try {
+      const r = await fetch(`${API}/api/rr/admin/automations/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...ADMIN_GET_HEADERS },
+        body: JSON.stringify({ messages: apiMessages, currentSpec: spec }),
+      });
+
+      if (!r.ok) {
+        const e = await r.json() as { error: string };
+        setToast({ text: e.error, ok: false });
+        return;
+      }
+
+      const d = await r.json() as { reply: string; spec: AutomationSpec; isComplete: boolean };
+      setMessages(prev => [...prev, { role: 'assistant', content: d.reply }]);
+      setSpec(d.spec);
+      setIsComplete(d.isComplete);
+      setTimeout(scrollToBottom, 50);
+    } catch {
+      setToast({ text: 'Failed to reach AI — check backend connection', ok: false });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveAutomation = async () => {
+    setSaving(true);
+    try {
+      const r = await fetch(`${API}/api/rr/admin/automations`, {
+        method: 'POST',
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({ spec }),
+      });
+      if (!r.ok) {
+        const e = await r.json() as { error: string };
+        setToast({ text: e.error, ok: false });
+      } else {
+        onSaved();
+      }
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Toast msg={toast} onDone={() => setToast(null)} />
+
+      {/* Breadcrumb */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button
+          onClick={onCancel}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--mantine-color-blue-6)', fontSize: 13, padding: 0 }}
+        >
+          ← Automations
+        </button>
+        <span style={{ color: 'var(--mantine-color-gray-3)', fontSize: 13 }}>/</span>
+        <span style={{ fontSize: 13, color: 'var(--mantine-color-gray-6)' }}>New automation</span>
+      </div>
+
+      {/* Split panel */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 20, alignItems: 'start' }}>
+
+        {/* Chat panel */}
+        <div style={{
+          background: '#fff',
+          border: '1px solid var(--mantine-color-gray-2)',
+          borderRadius: 12,
+          display: 'flex', flexDirection: 'column',
+          height: 560,
+        }}>
+          {/* Messages */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '20px 20px 12px' }}>
+            {messages.map((m, i) => (
+              <div key={i} style={{
+                display: 'flex',
+                flexDirection: m.role === 'user' ? 'row-reverse' : 'row',
+                gap: 10, marginBottom: 16,
+              }}>
+                {m.role === 'assistant' && (
+                  <div style={{
+                    width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+                    background: '#1a56db',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 14,
+                  }}>
+                    🤖
+                  </div>
+                )}
+                <div style={{
+                  maxWidth: '80%',
+                  padding: '10px 14px',
+                  borderRadius: m.role === 'user' ? '14px 14px 4px 14px' : '4px 14px 14px 14px',
+                  background: m.role === 'user' ? '#1a56db' : 'var(--mantine-color-gray-0)',
+                  color: m.role === 'user' ? '#fff' : 'var(--mantine-color-gray-8)',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  whiteSpace: 'pre-wrap',
+                }}>
+                  {m.content.replace(/\*([^*]+)\*/g, '$1')}
+                </div>
+              </div>
+            ))}
+
+            {loading && (
+              <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+                <div style={{
+                  width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+                  background: '#1a56db',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 14,
+                }}>
+                  🤖
+                </div>
+                <div style={{
+                  padding: '10px 16px',
+                  borderRadius: '4px 14px 14px 14px',
+                  background: 'var(--mantine-color-gray-0)',
+                  display: 'flex', gap: 4, alignItems: 'center',
+                }}>
+                  {[0, 1, 2].map(i => (
+                    <div key={i} style={{
+                      width: 6, height: 6, borderRadius: '50%',
+                      background: 'var(--mantine-color-gray-4)',
+                      animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
+                    }} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div ref={el => { chatEndRef.current = el; }} />
+          </div>
+
+          {/* Starter prompts — show only before first user message */}
+          {messages.filter(m => m.role === 'user').length === 0 && (
+            <div style={{ padding: '0 20px 12px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {STARTER_PROMPTS.map(p => (
+                <button
+                  key={p}
+                  onClick={() => void sendMessage(p)}
+                  style={{
+                    padding: '5px 12px', borderRadius: 20,
+                    border: '1px solid var(--mantine-color-blue-3)',
+                    background: 'var(--mantine-color-blue-0)',
+                    color: 'var(--mantine-color-blue-7)',
+                    fontSize: 12, cursor: 'pointer',
+                  }}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Input */}
+          <div style={{
+            padding: '12px 16px',
+            borderTop: '1px solid var(--mantine-color-gray-2)',
+            display: 'flex', gap: 10,
+          }}>
+            <input
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendMessage(input); } }}
+              placeholder="Describe your recognition goal…"
+              disabled={loading}
+              style={{
+                flex: 1, border: '1px solid var(--mantine-color-gray-3)',
+                borderRadius: 8, padding: '8px 12px',
+                fontSize: 13, outline: 'none',
+                background: loading ? 'var(--mantine-color-gray-0)' : '#fff',
+              }}
+            />
+            <button
+              onClick={() => void sendMessage(input)}
+              disabled={loading || !input.trim()}
+              style={{
+                padding: '8px 18px', borderRadius: 8, border: 'none',
+                background: input.trim() && !loading ? '#1a56db' : '#e2e8f0',
+                color: input.trim() && !loading ? '#fff' : '#94a3b8',
+                fontSize: 13, fontWeight: 700, cursor: input.trim() && !loading ? 'pointer' : 'default',
+              }}
+            >
+              Send
+            </button>
+          </div>
+        </div>
+
+        {/* Right panel: spec preview + save */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <SpecPreviewCard spec={spec} />
+
+          {isComplete && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void saveAutomation()}
+              disabled={saving}
+            >
+              {saving ? 'Saving…' : '⚡ Save & Activate'}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Inline CSS for the typing pulse animation */}
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 0.3; transform: scale(0.8); }
+          50% { opacity: 1; transform: scale(1.2); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ---- Automations tab root ----
+
+function AutomationsTab() {
+  const [rules, setRules] = useState<AutomationRule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [building, setBuilding] = useState(false);
+  const [toast, setToast] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`${API}/api/rr/admin/automations`, { headers: ADMIN_GET_HEADERS });
+      const d = await r.json() as { rules: AutomationRule[] };
+      setRules(d.rules);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const toggle = async (id: string, status: 'active' | 'paused') => {
+    const r = await fetch(`${API}/api/rr/admin/automations/${id}`, {
+      method: 'PATCH',
+      headers: ADMIN_HEADERS,
+      body: JSON.stringify({ status }),
+    });
+    if (!r.ok) {
+      const e = await r.json() as { error: string };
+      setToast({ text: e.error, ok: false });
+    } else {
+      setToast({ text: `Automation ${status === 'active' ? 'activated' : 'paused'}`, ok: true });
+      void load();
+    }
+  };
+
+  if (building) {
+    return (
+      <AutomationBuilder
+        onSaved={() => { setBuilding(false); void load(); setToast({ text: 'Automation saved and active!', ok: true }); }}
+        onCancel={() => setBuilding(false)}
+      />
+    );
+  }
+
+  const activeCount = rules.filter(r => r.status === 'active').length;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <Toast msg={toast} onDone={() => setToast(null)} />
+
+      {/* Header */}
+      <div style={{
+        background: 'linear-gradient(135deg, #1a56db 0%, #7c3aed 100%)',
+        borderRadius: 12, padding: '24px 28px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: '#fff', marginBottom: 4 }}>
+            🤖 Automation Builder
+          </div>
+          <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', lineHeight: 1.5 }}>
+            Describe your recognition goal in plain English. The AI agent asks a few<br />
+            follow-up questions and configures the workflow for you.
+          </div>
+        </div>
+        <button
+          onClick={() => setBuilding(true)}
+          style={{
+            padding: '10px 22px', borderRadius: 8, border: 'none',
+            background: '#fff', color: '#1a56db',
+            fontSize: 14, fontWeight: 700, cursor: 'pointer',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+          }}
+        >
+          + New automation
+        </button>
+      </div>
+
+      {/* Stats strip */}
+      <div style={{ display: 'flex', gap: 16 }}>
+        {[
+          { label: 'Active automations', value: activeCount, color: '#166534', bg: '#dcfce7' },
+          { label: 'Total rules', value: rules.length, color: '#0369a1', bg: '#dbeafe' },
+          { label: 'Need setup', value: rules.filter(r => (r.triggerConfig['integrationStatus'] as string) === 'needs_setup').length, color: '#92400e', bg: '#fef3c7' },
+        ].map(s => (
+          <div key={s.label} style={{
+            flex: 1, padding: '16px 20px', borderRadius: 10,
+            background: s.bg, display: 'flex', alignItems: 'center', gap: 14,
+          }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: s.color }}>{s.value}</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: s.color }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Rules list */}
+      {loading ? (
+        <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--mantine-color-gray-5)', fontSize: 13 }}>
+          Loading automations…
+        </div>
+      ) : rules.length === 0 ? (
+        <div style={{ padding: '60px 20px', textAlign: 'center' }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🤖</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--mantine-color-gray-7)' }}>
+            No automations yet
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--mantine-color-gray-5)', marginTop: 4 }}>
+            Click "New automation" and describe your goal to get started.
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={sectionLabel}>Configured rules</div>
+          {rules.map(rule => (
+            <AutomationRuleCard key={rule.id} rule={rule} onToggle={(id, status) => void toggle(id, status)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main AdminPage
 // ---------------------------------------------------------------------------
 
 const TABS: NavigationTabItem[] = [
-  { value: 'setup',   label: '⚙️  Setup' },
-  { value: 'budget',  label: '💰  Budget' },
-  { value: 'reports', label: '📊  Reports' },
-  { value: 'audit',   label: '📋  Audit Log' },
-  { value: 'slack',   label: '💬  Slack' },
+  { value: 'setup',       label: '⚙️  Setup' },
+  { value: 'budget',      label: '💰  Budget' },
+  { value: 'reports',     label: '📊  Reports' },
+  { value: 'audit',       label: '📋  Audit Log' },
+  { value: 'slack',       label: '💬  Slack' },
+  { value: 'automations', label: '🤖  Automations' },
 ];
 
 export function AdminPage() {
@@ -1466,11 +2254,12 @@ export function AdminPage() {
         onTabChange={setActiveTab}
       />
 
-      {activeTab === 'setup'   && <SetupTab />}
-      {activeTab === 'budget'  && <BudgetTab />}
-      {activeTab === 'reports' && <ReportsTab />}
-      {activeTab === 'audit'   && <AuditTab />}
-      {activeTab === 'slack'   && <SlackTab />}
+      {activeTab === 'setup'       && <SetupTab />}
+      {activeTab === 'budget'      && <BudgetTab />}
+      {activeTab === 'reports'     && <ReportsTab />}
+      {activeTab === 'audit'       && <AuditTab />}
+      {activeTab === 'slack'       && <SlackTab />}
+      {activeTab === 'automations' && <AutomationsTab />}
     </div>
   );
 }

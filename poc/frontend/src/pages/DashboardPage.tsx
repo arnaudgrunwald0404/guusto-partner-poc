@@ -40,11 +40,15 @@ interface ValueStat {
 }
 
 interface ProgramStats {
-  totalShoutouts: number;
-  uniqueSenders: number;
-  uniqueRecipients: number;
-  totalGiftedCents: number;
-  redemptionRatePct: number;
+  shoutouts: {
+    totalSent: number;
+    uniqueSenders: number;
+    uniqueRecipients: number;
+    totalGiftedCents: number;
+    redemptionRate: string; // e.g. "66.7%" or "N/A"
+    giftsDelivered: number;
+    giftsRedeemed: number;
+  };
   coverage?: { totalEmployees: number; recognizedEmployees: number; coveragePct: string };
   alerts?: {
     unrecognizedEmployees: Array<{ employeeId: string; name: string }>;
@@ -434,22 +438,22 @@ export function DashboardPage() {
       {/* Quick stats */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 28 }}>
         <QuickStatCard
-          n={stats ? String(stats.totalShoutouts) : '—'}
+          n={stats ? String(stats.shoutouts.totalSent) : '—'}
           label="Recognitions sent"
           color="#1a56db"
         />
         <QuickStatCard
-          n={stats?.coverage ? `${stats.coverage.coveragePct}` : stats ? String(stats.uniqueRecipients) : '—'}
+          n={stats?.coverage ? stats.coverage.coveragePct : stats ? String(stats.shoutouts.uniqueRecipients) : '—'}
           label="Employee coverage"
           color="#059669"
         />
         <QuickStatCard
-          n={stats ? `$${(stats.totalGiftedCents / 100).toFixed(0)}` : '—'}
+          n={stats ? `$${(stats.shoutouts.totalGiftedCents / 100).toFixed(0)}` : '—'}
           label="Rewards sent"
           color="#7c3aed"
         />
         <QuickStatCard
-          n={stats ? `${stats.redemptionRatePct}%` : '—'}
+          n={stats ? stats.shoutouts.redemptionRate : '—'}
           label="Redemption rate"
           color="#d97706"
         />
@@ -497,7 +501,7 @@ export function DashboardPage() {
                 <span style={{ fontSize: 16 }}>✓</span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, color: '#166534' }}>Recognition detected</div>
-                  <div style={{ fontSize: 11, color: '#6b7280' }}>John Kim · "best support engineer we've ever worked with"</div>
+                  <div style={{ fontSize: 11, color: '#6b7280' }}>Samuel Abramsky · "best customer success specialist we've ever worked with"</div>
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8 }}>
@@ -521,27 +525,27 @@ export function DashboardPage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                 <div style={{
                   width: 40, height: 40, borderRadius: '50%',
-                  background: '#fce7f3', border: '2px solid #f59e0b',
+                  background: '#d1fae5', border: '2px solid #f59e0b',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: 15, fontWeight: 800, color: '#1e293b', flexShrink: 0,
-                }}>CR</div>
+                }}>DB</div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
-                    Carmen Rodriguez
+                    Daironex Batista
                     <span style={{
-                      marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#92400e',
-                      background: '#fef3c7', border: '1px solid #fde68a',
+                      marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#065f46',
+                      background: '#d1fae5', border: '1px solid #6ee7b7',
                       borderRadius: 8, padding: '1px 6px',
-                    }}>FRONTLINE</span>
+                    }}>TOP PERFORMER</span>
                   </div>
                   <div style={{ fontSize: 11, color: '#92400e', marginTop: 1 }}>
-                    Retail Associate · Never recognized
+                    Sales Development Rep · Never recognized this quarter
                   </div>
                 </div>
               </div>
               <div style={{ fontSize: 12, color: '#78350f', lineHeight: 1.6, marginBottom: 10 }}>
-                No corporate email, no desk. When Carmen gets recognized, she receives
-                a personal QR link — no app or login needed. Scans in 10 seconds on any phone.
+                Daironex is booking 2× the team average in qualified meetings but has never
+                been formally recognized. A quick shoutout + Guusto gift card takes 60 seconds.
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
                 <Link
@@ -552,10 +556,10 @@ export function DashboardPage() {
                     fontSize: 12, fontWeight: 700, textDecoration: 'none',
                   }}
                 >
-                  Recognize Carmen ✨
+                  Recognize Daironex ✨
                 </Link>
                 <Link
-                  to="/employee/emp_004"
+                  to="/employee/emp_010"
                   style={{
                     display: 'inline-block', padding: '6px 12px',
                     border: '1px solid #f59e0b', color: '#92400e', borderRadius: 6,
@@ -568,8 +572,9 @@ export function DashboardPage() {
               </div>
             </div>
             <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.6 }}>
-              <strong style={{ color: '#374151' }}>58% of the workforce</strong> is frontline.
-              ClearCompany R&R is one of few platforms that reaches them without requiring corporate access.
+              <strong style={{ color: '#374151' }}>Recognition nudges</strong> surface employees
+              like Daironex — high performers who are overdue for acknowledgment — so managers
+              never miss the moment.
             </div>
           </div>
         </div>

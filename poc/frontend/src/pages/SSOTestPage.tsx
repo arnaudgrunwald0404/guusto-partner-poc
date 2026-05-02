@@ -168,7 +168,7 @@ export function SSOTestPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const RECIPIENT_ID = 'emp_001';
-  const RECIPIENT_EMAIL = 'john.kim@acmecorp.com';
+  const RECIPIENT_EMAIL = 'agrunwald+4@clearcompany.com';
 
   // Step 1: Place order
   const placeOrder = async () => {
@@ -284,7 +284,7 @@ export function SSOTestPage() {
               Place Guusto order via API
             </div>
             <div style={{ fontSize: 13, color: '#6b7280', lineHeight: 1.5, marginBottom: 12 }}>
-              Sends a $25 recognition shoutout for <strong>John Kim</strong> from{' '}
+              Sends a $25 recognition shoutout for <strong>Samuel Abramsky</strong> from{' '}
               <strong>Sarah (mgr_001)</strong> using corrected API body format
               (<code>orderItems[].recipient</code> object confirmed against sandbox).
             </div>
