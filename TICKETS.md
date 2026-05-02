@@ -2083,6 +2083,381 @@ The Guusto public API is **8 endpoints, no webhooks, no catalog API, no auth/rat
 
 ---
 
+---
+
+## Epic: Employee Home Feed (P1-8)
+
+> **Context:** Screen 1 of the Guusto product map ("Hi Michael" dashboard) is the first thing every employee sees when they open the R&R module. It is the social heartbeat of the program — the feed where recognition is visible, the nudge surface that drives participation, and the compose entry point. Without it, recognition exists only in profile tabs and manager dashboards; the ambient social layer never forms. These five tickets deliver the complete employee-facing home in Phase 1.
+>
+> **Product map reference:** `PRODUCT-MAP.md` § Screen 1 — Dashboard (Employee view).
+>
+> **Out of scope for this epic (per product map decisions):**
+> - Upcoming Celebrations widget → Phase 3 (requires HRIS hire/birthday dates)
+> - Wellness Challenge → out of scope entirely
+> - Charity/impact tracker → out of scope entirely
+> - Monetary gift flow on home page → Phase 2 (RR-060/061)
+
+---
+
+### RR-102 — Employee recognition home: page shell + routing (size: S)
+**Epic:** Employee Home Feed
+**Phase:** 1
+**Goal:** Land the route, two-column layout shell, personalised greeting, and feature flag for the employee recognition home page at `/r/recognition`. Replaces the current redirect to `/r/recognition/manager` as the default entry point for all users — managers are redirected to `/r/recognition/manager` via nav config, everyone else lands here.
+
+**Technical approach:**
+- New React route `recognition/home` nested under the existing `recognition/*` area wrapper (`recognitionArea.tsx`).
+- Update `routes.tsx`: change the index redirect from `/r/recognition/manager` to `/r/recognition/home`; add `home` to `recognitionSecondaryNavigation` as the first tab ("Home").
+- Page layout: two-column CSS grid. Left column: `minWidth 0, flex 1` (compose bar + feed). Right column: `width 320px, flexShrink 0` (widget stack). Collapses to single column at breakpoint `md` (≤768px), right rail stacks below feed on mobile.
+- Personalised greeting: `"Hi, {firstName} 👋"` sourced from `useHeaderApi` session data already in the app shell. Falls back to `"Hi there 👋"` if name is unavailable.
+- Feature-flagged under `rr_recognition`. Gate at route level — if flag is off, render a `<Navigate to="/r/recognition/manager" />` fallback so the manager view stays accessible.
+- Inject "Send Recognition ✨" CTA into the PageWrapper header banner via the existing `RecognitionAreaOutletContext` outlet pattern (same as manager dashboard).
+- `contentWidth="fullWidth"` on PageWrapper — the two-column grid needs breathing room.
+
+**Acceptance criteria:**
+- GIVEN the `rr_recognition` flag is on, WHEN a user navigates to `/r/recognition`, THEN the home page renders with greeting and two-column layout.
+- GIVEN a user is authenticated, WHEN the page loads, THEN `"Hi, [FirstName]"` is displayed using the session first name.
+- GIVEN the `rr_recognition` flag is off, WHEN a user navigates to `/r/recognition`, THEN they are redirected to `/r/recognition/manager`.
+- GIVEN a viewport ≤768px, WHEN the page renders, THEN right rail stacks below the feed (single column).
+- GIVEN the user navigates to a sub-route (e.g. `/r/recognition/manager`), WHEN on mobile, THEN the "Home" tab is correctly highlighted only on `/r/recognition/home`.
+
+**Unit tests:**
+- `test_home_route_renders_greeting()`
+- `test_flag_off_redirects_to_manager()`
+- `test_first_name_from_session_shown()`
+- `test_responsive_layout_collapses_at_md()`
+
+**Dependencies:** RR-010 (schema, for downstream), existing `recognitionArea.tsx` outlet pattern.
+**Out of scope:** right-rail widget content (RR-105, RR-106), feed content (RR-104), compose bar (RR-103).
+
+**Design notes:** Layout mirrors Guusto's two-column dashboard (PRODUCT-MAP Screen 1). Right rail is `320px` fixed — wide enough for nudge cards, narrow enough not to crowd the feed. Use the same `PageWrapper`/`NavigationTabs` chrome as the manager dashboard; the home tab is a peer tab, not a nested page.
+- **CC components:** `PageWrapper` (existing), CSS grid layout div (inline styles or CSS module — follow existing pattern in the area), `Skeleton` for right-rail widgets while loading.
+- **A11y:** `<main>` landmark wraps both columns. Right rail has `aria-label="Recognition sidebar"`. Greeting is an `<h1>` or the PageWrapper title; don't double-render it.
+
+**Tracking:** `dashboard_viewed` (existing taxonomy event). Fire on mount with properties: `surface: 'employee_home'`, `has_recognitions_in_feed: boolean` (set after feed first load resolves).
+
+---
+
+### RR-103 — Quick-compose entry bar (size: S)
+**Epic:** Employee Home Feed
+**Phase:** 1
+**Goal:** Surface a "Start sending…" compose bar at the top of the home feed that opens the RR-013 compose drawer on click. This is the primary CTA for recognition creation — it must be the first thing a user sees above the feed.
+
+**Technical approach:**
+- Render a non-editable input-style bar (a `<button role="textbox">` or a `div` styled as an input) with placeholder text `"Recognize a colleague…"` and a `"Send Recognition ✨"` primary button to its right.
+- Clicking anywhere on the bar (input area or button) opens the RR-013 compose drawer. No inline text entry — the bar is a trigger, not an actual input field. This avoids duplicating textarea state management.
+- **Deep-link pre-fill:** accept `?compose=1` and `?recipient=<employeeId>` query params. On mount, if `compose=1` is present, open the drawer automatically. If `recipient=<id>` is also present, pre-populate the recipient field in the drawer. This enables "Recognize ✨" quick-action CTAs elsewhere (right rail, profile page, email links) to land directly in the compose flow.
+- On successful submission (compose drawer emits `onSuccess` callback): close drawer, show a `Toast` "Recognition sent! 🎉", and trigger a feed refresh in RR-104 (via shared state — a `recognitionsSentCount` counter in a shared context, or a simple `refetch` callback passed via props).
+- The `"Send Recognition ✨"` button in the PageWrapper header banner (injected via outlet context) should also open this same drawer — wire them to the same state.
+
+**Acceptance criteria:**
+- GIVEN the home page loads, WHEN the user sees the compose bar, THEN it shows `"Recognize a colleague…"` placeholder and a `"Send Recognition ✨"` button.
+- GIVEN the user clicks the compose bar or the button, WHEN the click is registered, THEN the RR-013 compose drawer opens.
+- GIVEN `?compose=1` is in the URL, WHEN the page mounts, THEN the drawer opens automatically.
+- GIVEN `?compose=1&recipient=emp_001`, WHEN the page mounts, THEN the drawer opens with `emp_001` pre-selected in the recipient field.
+- GIVEN a recognition is successfully sent, WHEN the drawer closes, THEN a Toast confirms success and the feed refreshes.
+
+**Unit tests:**
+- `test_bar_click_opens_compose_drawer()`
+- `test_compose_query_param_auto_opens_drawer()`
+- `test_recipient_query_param_prefills_drawer()`
+- `test_success_shows_toast_and_triggers_refetch()`
+
+**Dependencies:** RR-013 (compose drawer), RR-104 (feed refetch callback).
+**Out of scope:** inline quick-compose without drawer (decision: keep single compose surface to avoid state duplication), gift attach (Phase 2).
+
+**Design notes:** Matches Guusto's `"Start sending…"` bar (PRODUCT-MAP Screen 1, top of feed). Visually: full-width card with a rounded input-shaped region (background `#f8fafc`, border `1px solid #e2e8f0`, `border-radius: 8px`) on the left and a `Button variant="primary"` on the right. Padding `12px 16px`. Hover state on the input region lifts the border colour to the primary accent.
+- **CC components:** `Button` (primary, "Send Recognition ✨"), `Card` (wraps the bar), `Toast` (success confirm), existing `RecognizeDrawer` from RR-013.
+- **Microcopy:** Placeholder `"Recognize a colleague…"` — keep it action-oriented. Toast: `"[RecipientFirstName] has been recognized! 🎉"`. UX writing collab for final copy.
+- **A11y:** The trigger region needs `role="button"` and `aria-label="Open recognition compose"`. The outer Card must not trap focus.
+
+**Tracking:** `recognition_composed` with `entry_surface: 'home_compose_bar'` (new value for existing `entry_surface` property — add to taxonomy). Also fires when deep-linked (`entry_surface: 'deep_link'` per existing taxonomy).
+
+---
+
+### RR-104 — Home feed: recognition cards + pagination (size: M)
+**Epic:** Employee Home Feed
+**Phase:** 1
+**Goal:** Render the company-wide recognition feed on the home page as a scrollable list of shoutout cards, with scope toggle ("Company" / "My Team"), optimistic inserts from RR-103, real-time new-recognition banner from RR-016, and emoji reactions from RR-045. This is the primary social surface of the R&R module.
+
+**Technical approach:**
+- Reuse `GET /api/rr/recognitions` paginated endpoint (RR-015) with `?scope=company` (default) or `?scope=team`. Fetch on mount; `page=1&limit=10`; "Load more" appends next page into the existing list.
+- **Scope toggle:** two-button pill strip ("Company" / "My Team") above the feed. "My Team" filters to recognitions where sender or recipient is a direct report or peer of the logged-in user — add a `scope` query param to the RR-015 API.
+- **Card anatomy** (one card per recognition):
+  - Left: sender avatar (initials fallback) + name, `"recognized"` verb, recipient name + avatar. Recipient avatar gets a subtle gold ring (`box-shadow: 0 0 0 3px #fbbf24`) if the recipient is the logged-in user — makes personal recognitions immediately visible.
+  - Value badge(s): pill chip per tagged value (RR-010 `recognition_value_tag`).
+  - Message: full text, clamped to 3 lines with "Read more" expand link if over 200 characters.
+  - Metadata row: relative timestamp (`"2h ago"`, `"Yesterday"`, `"Apr 24"`), visibility badge (Company-wide / Team only / Private — only shown to sender and admins), Gong source badge if `source='gong_ai'`.
+  - Reaction bar: RR-045 emoji reactions. Clicking a reaction toggles it; count shown beside each emoji. `"+ React"` button opens emoji picker.
+- **Optimistic insert:** when RR-103 `onSuccess` fires, prepend the new recognition to the feed list client-side immediately. Mark with a subtle `"Just now"` timestamp. Do not refetch the full list.
+- **Real-time banner:** reuse RR-016 poller. When N new recognitions are detected, show `"↑ {N} new recognition{s} — click to refresh"` banner above the feed. Clicking it refetches page 1 and scrolls to top.
+- **Empty state:** `"No recognitions yet — be the first to send one. 🎯"` with the compose bar CTA link.
+- **Skeleton loading:** render 3 `<Skeleton>` card placeholders on initial load. Remove once first page resolves.
+- **[ASSUMED]** RR-015 API supports `scope` param. If not, add it as part of this ticket — it is a simple server-side filter on the existing query.
+
+**Acceptance criteria:**
+- GIVEN the home page loads, WHEN the feed fetches, THEN 10 recognition cards render with correct sender, recipient, value badges, and timestamp.
+- GIVEN the user selects "My Team" scope, WHEN the toggle is clicked, THEN the feed refetches filtered to team-scoped recognitions.
+- GIVEN the logged-in user is a recipient of a recognition, WHEN that card renders, THEN the recipient avatar has a gold ring.
+- GIVEN a recognition is sent via RR-103, WHEN the drawer closes, THEN the new card appears at the top of the feed without a full reload.
+- GIVEN RR-016 detects 3 new recognitions, WHEN the banner is clicked, THEN the feed refreshes to page 1 and scrolls to top.
+- GIVEN a message is over 200 characters, WHEN rendered, THEN it is clamped at 3 lines with a "Read more" link.
+- GIVEN the feed is empty, WHEN rendered, THEN the empty state is shown.
+
+**Unit tests:**
+- `test_recognition_cards_render_with_correct_data()`
+- `test_scope_toggle_refetches_with_correct_param()`
+- `test_recipient_avatar_gets_gold_ring_for_current_user()`
+- `test_optimistic_insert_prepends_card()`
+- `test_new_recognitions_banner_appears_and_triggers_refresh()`
+- `test_message_clamp_and_expand()`
+- `test_empty_state_renders()`
+- `test_skeleton_shown_while_loading()`
+
+**Dependencies:** RR-015 (feed API + scope param), RR-016 (live banner), RR-045 (reactions), RR-103 (optimistic insert callback).
+**Out of scope:** comments (deferred per RR-045/RR-100), GIF/image attachments (Phase 2), Gong source deep-link (Phase 3).
+
+**Design notes:** Card visual language matches the POC recognition feed already in `/r/recognition/feed`. Reuse `ShoutoutCard` component from that page or extract it into a shared component (`src/pages/recognition/components/RecognitionCard.tsx`) so both surfaces stay in sync.
+- **CC components:** `Card`, `Avatar`, `Badge`, `Skeleton`, `Button` (Load more), `Toast` (already wired via RR-103).
+- **Layout:** cards in a single column, `gap: 12px`. Each card: `padding: 20px`, `border-radius: 12px`, `border: 1px solid #e2e8f0`. Reaction bar is `height: 32px`, flush to the card bottom.
+- **A11y:** each card is a `<article>` with `aria-label="Recognition from [Sender] to [Recipient]"`. Reaction buttons have `aria-label="React with [emoji]"` and `aria-pressed` state.
+
+**Tracking:** `recognition_received` with `surface: 'home_feed'` (new surface value for existing event — add to taxonomy). `recognition_reacted` (existing — RR-045 already emits this). No new events needed.
+
+---
+
+### RR-105 — "People to Recognize" right-rail nudge widget (size: M)
+**Epic:** Employee Home Feed
+**Phase:** 1
+**Goal:** Surfaces 3–5 colleagues who are overdue for recognition in the right rail, ranked by recency gap. Clicking a person opens the compose drawer pre-filled with them. This is the primary driver of recognition equity — without it, managers and peers default to recognizing the same high-visibility people repeatedly.
+
+**Technical approach:**
+- New backend endpoint `GET /api/rr/nudges/people-to-recognize?limit=5`:
+  - **For managers:** return direct reports ordered by `last_recognized_at ASC NULLS FIRST` (least recently recognized first). Source: `recognitions` table (RR-010) join with CC org chart (`manager_id = current_user_id`).
+  - **For ICs:** return peers (same department or same manager) ordered by the same recency gap. **[ASSUMED]** CC org chart provides `department_id` and `manager_id` — confirm access in RR-100.
+  - Exclude: the logged-in user themselves, employees terminated after their last recognition date.
+  - Response shape: `[{ employeeId, firstName, lastName, title, avatarUrl, lastRecognizedAt: ISO8601 | null, daysSinceRecognized: number | null }]`
+  - Cache TTL: 5 minutes (stale-while-revalidate acceptable — this is a nudge, not a real-time counter).
+- FE widget:
+  - Header: `"People to Recognize"` with a subtitle `"It's been a while…"` when gap >30 days, or `"Keep the momentum going"` otherwise.
+  - Each row: `<Avatar>` (initials fallback), name + title, gap badge (`"Never recognized"` in red, `"{N} days ago"` in amber if >30 days, `"{N} days ago"` in green if ≤30 days).
+  - Row CTA: `"Recognize ✨"` slim `<Button>` on the right — opens RR-013 compose drawer with `initialEmployee` pre-set to this person.
+  - After a recognition is sent via this CTA, the person is removed from the list and the next person slides in (or empty state if none remain).
+  - Empty state: `"Your team is all caught up 🎉"` — important positive reinforcement when the manager has recently recognized everyone.
+  - Loading state: 3 `<Skeleton>` rows.
+
+**Acceptance criteria:**
+- GIVEN the widget loads for a manager, WHEN rendered, THEN direct reports are shown ordered by longest recognition gap first.
+- GIVEN an employee has never been recognized, WHEN shown in the widget, THEN a red "Never recognized" badge is displayed.
+- GIVEN the user clicks "Recognize ✨" on a row, WHEN the compose drawer opens, THEN that employee is pre-selected as the recipient.
+- GIVEN a recognition is sent from this widget, WHEN the drawer closes, THEN the recognized employee is removed from the nudge list.
+- GIVEN all direct reports have been recognized recently, WHEN the widget renders, THEN the "all caught up" empty state is shown.
+- GIVEN the endpoint returns an error, WHEN the widget renders, THEN it fails silently (no error banner — right rail should never break the main feed).
+
+**Unit tests:**
+- `test_endpoint_returns_employees_sorted_by_recency_gap()`
+- `test_manager_sees_only_direct_reports()`
+- `test_never_recognized_shown_first()`
+- `test_terminated_employees_excluded()`
+- `test_recognize_cta_passes_correct_employee_to_drawer()`
+- `test_recognized_employee_removed_from_list_after_send()`
+- `test_empty_state_renders_when_all_caught_up()`
+- `test_widget_fails_silently_on_api_error()`
+
+**Dependencies:** RR-010 (recognitions table), RR-013 (compose drawer pre-fill), RR-102 (right-rail slot), CC org chart access (confirm via RR-100 OQ).
+**Out of scope:** ML-based recognition recommendations (Phase 3), "Upcoming Celebrations" nudge (Phase 3 — requires HRIS hire/birthday dates), peer-to-peer recommendations for ICs outside the same team (Phase 3).
+
+**Design notes:** This widget is the primary equity lever. The rank order (longest gap first, never-recognized floated to top) is intentional — it counteracts recency and visibility bias. Make the gap label prominent.
+- **CC components:** `Avatar` (sm), `Badge` (error for never, warning for >30d, success for ≤30d), `Button` (secondary slim, "Recognize ✨"), `Skeleton` (3 rows while loading), `Card` (widget container).
+- **Widget container:** `padding: 16px 20px`, `border-radius: 12px`, `border: 1px solid #e2e8f0`. Header row: label + subtle people-count badge. Rows: `48px` height, `gap: 8px`, `border-bottom: 1px solid #f8f9fa` between rows.
+- **A11y:** Each row is a `<li>` in a `<ul>`. The "Recognize ✨" button has `aria-label="Recognize [FirstName] [LastName]"` to distinguish buttons for screen readers.
+
+**Tracking:** New property on `recognition_composed`: `entry_surface: 'people_to_recognize_nudge'` (add to existing `entry_surface` enum in taxonomy). Also emit `manager_insight_viewed` with `insight_type: 'people_to_recognize_widget'` on first widget render per session.
+
+---
+
+### RR-106 — Recognition leaderboard right-rail widget (size: S)
+**Epic:** Employee Home Feed
+**Phase:** 1
+**Goal:** Show the top 5 recognized employees and top 5 recognizers for the current period in the right rail. Provides the social proof and ambient participation signal that drives engagement — seeing peers on the leaderboard motivates action.
+
+**Technical approach:**
+- New backend endpoint `GET /api/rr/leaderboard?period={month|quarter}&metric={received|sent}&limit=5`:
+  - Aggregates from `recognitions` table (RR-010): `COUNT(*)` grouped by `recipient_id` (metric=received) or `sender_id` (metric=sent), filtered to `created_at` within the period window, scoped to the tenant.
+  - Period windows: `month` = calendar month-to-date; `quarter` = calendar quarter-to-date.
+  - Response: `[{ employeeId, firstName, lastName, title, avatarUrl, count: number, rank: number }]`
+  - Cache TTL: 5 minutes (leaderboard does not need to be real-time).
+  - Only counts recognitions with `visibility IN ('company', 'team')` — private recognitions do not count toward public leaderboard rank.
+- FE widget:
+  - Header: `"Recognition Leaderboard"`.
+  - Two toggle strips stacked: (1) metric toggle — "Most Recognized" (default) / "Top Recognizers"; (2) period toggle — "This Month" (default) / "This Quarter".
+  - Each row: rank number (`#1`, `#2`…), `<Avatar>` (sm), name + title, count badge (`"{N} recognitions"` / `"{N} sent"`).
+  - Clicking any row navigates to that employee's CC profile recognition tab (RR-040) — same behaviour as clicking a name anywhere in the module.
+  - Empty state: `"No recognitions yet this {period}."` with compose bar CTA link.
+  - Loading state: 5 `<Skeleton>` rows.
+  - The logged-in user's own row (if present) is subtly highlighted (`background: #eff6ff`).
+
+**Acceptance criteria:**
+- GIVEN recognitions exist for the current month, WHEN the widget loads, THEN the top 5 recipients are shown with correct counts and ranks.
+- GIVEN the user switches to "Top Recognizers", WHEN toggled, THEN the list re-fetches and shows the top senders.
+- GIVEN the user switches to "This Quarter", WHEN toggled, THEN the list re-fetches using the quarter-to-date window.
+- GIVEN the logged-in user appears in the leaderboard, WHEN rendered, THEN their row is highlighted.
+- GIVEN no recognitions exist for the period, WHEN rendered, THEN the empty state is shown.
+- GIVEN a private recognition exists, WHEN computing ranks, THEN it is excluded from the leaderboard count.
+- GIVEN the endpoint errors, WHEN the widget renders, THEN it fails silently (no error banner).
+
+**Unit tests:**
+- `test_endpoint_aggregates_received_count_by_recipient()`
+- `test_private_recognitions_excluded_from_leaderboard()`
+- `test_period_filter_month_vs_quarter()`
+- `test_metric_toggle_switches_to_sender_aggregation()`
+- `test_current_user_row_highlighted()`
+- `test_empty_state_when_no_recognitions()`
+- `test_widget_fails_silently_on_api_error()`
+
+**Dependencies:** RR-010 (recognitions table), RR-040 (profile recognition tab — link target), RR-102 (right-rail slot).
+**Out of scope:** org-unit-scoped leaderboards (Phase 3), leaderboard notifications ("You moved up to #2!") (Phase 3), opt-out from leaderboard (confirm with Legal — add to RR-100 if needed).
+
+**Design notes:** Leaderboard tone should feel celebratory, not competitive. Avoid ranking language that implies anyone is "losing" — frame as "most celebrated" rather than "top scorer".
+- **CC components:** `Avatar` (sm), `Badge` (info/light, count), `Skeleton` (5 rows), `Card` (widget container).
+- **Rank display:** `#1` in gold (`#d97706`), `#2` in silver (`#94a3b8`), `#3` in bronze (`#b45309`), `#4–5` in default text color. This mirrors Guusto's visual treatment without requiring custom icon assets.
+- **A11y:** `<ol>` list (ordered, because rank matters). Each `<li>` has `aria-label="Rank {N}: [Name], {count} recognitions"`. Period and metric toggles use `<fieldset>/<legend>` or `role="radiogroup"` pattern.
+
+**Tracking:** `manager_insight_viewed` with `insight_type: 'leaderboard_widget'`, `period`, `metric` properties — fires on first render per session. Row click fires `profile_recognition_tab_viewed` (existing event) with `source: 'leaderboard_widget'`.
+
+---
+
+## Epic: Employee Gift Redemption UX (P2-9)
+
+> **Context (PRD gap identified April 2026):** The Phase 2 ticket backlog covers Guusto API integration (RR-050–RR-078) and the iFrame shell (RR-075), but does not specify the ClearCompany-native surfaces that surround the redemption experience: the navbar badge, the "Redeem Gifts" inbox page, expiry warnings, and the post-redemption confirmation state. These tickets fill that gap.
+>
+> **Product map reference:** `PRODUCT-MAP.md` § Screen 4 (all steps 4-A through 4-D) and § Screen 4e (CC-Native Redemption Inbox).
+>
+> **Guusto-side context from live screenshots (April 2026):** The employee redemption flow has four Guusto-hosted steps: (1) pre-claim — only the left recognition card is visible, the employee clicks "Claim Gift to Account"; (2) post-claim — the right panel appears with remaining balance, amount entry, and "Select a Merchant" CTA; (3) merchant selection modal (gift card path) — search + merchant list; (4) irrevocability confirmation modal — "Are you sure? Redeem $X for [Merchant]" with required checkbox. Steps 3–4 are entirely Guusto-owned and CC never replicates them. Steps 1–2 are what CC wraps in the iFrame (RR-075).
+
+---
+
+### RR-107 — Redemption navbar badge + pending gift count API (size: S)
+**Epic:** Employee Gift Redemption UX
+**Phase:** 2
+**Goal:** Surface the "you have gifts to redeem" signal in CC's navigation so employees are not dependent on email notifications to discover pending rewards.
+
+**Technical approach:**
+- New server endpoint `GET /api/rr/recipient/pending-gifts?userId` returns `{ count: number, gifts: Gift[] }` where count = number of gifts where `status IN ('UNCLAIMED', 'PARTIALLY_REDEEMED')` (remaining balance > 0).
+- Data source: `rr_monetary_attachments` table (CC-local, populated by RR-067 and RR-071 pollers). **Do not** call Guusto on every badge render — this is a CC-local read.
+- Stale-while-revalidate: badge refreshes every 5 minutes in the background (same polling cadence as RR-071) or on route focus.
+- Wire the badge into the R&R secondary nav tab (the "Redeem" tab) and optionally into the top-level R&R global nav item as a count chip.
+- Feature-flagged under `rr_monetary`.
+
+**Acceptance criteria:**
+- GIVEN a user has 2 pending gifts, WHEN they navigate to any R&R page, THEN the "Redeem" nav tab shows badge `2`.
+- GIVEN both gifts are fully redeemed, WHEN the next poll completes, THEN the badge disappears.
+- GIVEN the `rr_monetary` flag is off, WHEN the user loads the page, THEN no badge is shown.
+- GIVEN an employee with no gifts, THEN no badge and no empty-state badge (badge is absent, not zero).
+
+**Unit tests:**
+- `test_badge_count_excludes_fully_redeemed()`
+- `test_badge_hidden_when_feature_flag_off()`
+- `test_badge_does_not_call_guusto_api_directly()`
+- `test_stale_while_revalidate_uses_cached_count()`
+
+**Dependencies:** RR-067, RR-071, RR-050
+**Out of scope:** real-time WebSocket push for badge (polling is fine for a badge; Phase 3 if needed); badge on non-R&R global nav items (keep it in R&R sub-nav for now).
+
+**Events fired:** `redemption_badge_viewed` on badge render (once per session, not per page). Properties: `pending_gift_count`, `user_id` (hashed). This is the M2 (Notification-to-Action) funnel entry for the web path.
+
+**Design notes:**
+- Badge uses standard CC Badge/Tag component, variant `info`, size `sm`, placed on the "Redeem" tab label in the R&R secondary navigation.
+- Do not show a numeric badge > 99 — show `99+`.
+- Badge disappears (not shows 0) when there are no pending gifts.
+
+---
+
+### RR-108 — "Redeem Gifts" inbox page (size: M)
+**Epic:** Employee Gift Redemption UX
+**Phase:** 2
+**Goal:** Give employees a scannable list of their pending, available, and historical gifts before handing off to the Guusto iFrame. This is the CC-owned surface that precedes every redemption.
+
+**Technical approach:**
+- New route `/r/recognition/redeem` — lazy-loaded page component in the recognition area, added to the secondary nav as the "Redeem" tab item.
+- Page fetches `GET /api/rr/recipient/pending-gifts` (RR-107 endpoint extended to include full gift details for list rendering). Server merges CC recognition metadata (message, sender, value tags) with Guusto balance data (remaining amount, expiry date from RR-067 order details).
+- Each gift row: org/sender avatar, recognition message excerpt (≤120 chars), dollar amount + remaining balance, expiry date, status badge, CTA.
+- **Status states:**
+  - `Unclaimed` — gift sent by Guusto, not yet accepted by employee. CTA: "Claim Gift" → launches RR-075 iFrame/link.
+  - `Available` — claimed, remaining balance > 0. CTA: "Redeem Now →" → launches RR-075 iFrame/link pre-scrolled to redemption panel.
+  - `Redeemed` — remaining balance = 0. Read-only history row. CTA: "View confirmation" (optional).
+  - `Expired` — past expiry. Read-only. No CTA.
+- Expiry warning: when days_until_expiry ≤ 14, show amber inline badge "Expires in X days" on the row.
+- "Redeem Now" → opens RR-075 iframe (or new tab if iframe config is `redemption_via_iframe=false`).
+- Empty state: "No gifts yet — recognitions with monetary rewards will appear here."
+- Pagination: 20/page, load more.
+
+**Acceptance criteria:**
+- GIVEN a recipient has 2 available gifts and 1 expired gift, WHEN they visit /r/recognition/redeem, THEN all 3 appear (2 with CTA, 1 read-only).
+- GIVEN a gift expires in 10 days, THEN an amber "Expires in 10 days" warning appears on that row.
+- GIVEN a gift is fully redeemed ($0 remaining), THEN its status shows "Redeemed" and no "Redeem Now" CTA is shown.
+- GIVEN no gifts exist, THEN the empty state copy renders correctly.
+- GIVEN "Redeem Now" is clicked, THEN the iFrame opens (or new tab depending on config).
+
+**Unit tests:**
+- `test_status_computation_unclaimed_vs_available()`
+- `test_expiry_warning_shown_within_14_days()`
+- `test_fully_redeemed_gift_shows_no_cta()`
+- `test_empty_state_renders_no_gifts()`
+- `test_pagination_load_more()`
+
+**Dependencies:** RR-107, RR-075, RR-067, RR-076
+**Out of scope:** in-page redemption (always hands off to Guusto iframe); bulk redemption; gift balance editing (Guusto-side only).
+
+**Events fired:**
+- `redemption_inbox_viewed` — fires on page mount. Properties: `pending_gift_count`, `available_gift_count`.
+- `redemption_cta_clicked` — fires on "Redeem Now" / "Claim Gift". Properties: `gift_id`, `status_at_click` (unclaimed|available), `days_until_expiry`.
+
+**Design notes:**
+- **CC components:** `PageHeader` (title "Redeem Your Gifts", count chip), `Card` (each gift row — list variant, not summary card variant), `Avatar` (sender, 40px), `Badge`/`Tag` (status: `info`=Available, `warning`=Unclaimed, `neutral`=Redeemed, `error`=Expired; expiry warning uses `warning`), `Skeleton` (loading state, 3 placeholder rows), `EmptyState` component.
+- **Key states:** loading → populated → empty → error (API failed, show "Unable to load gifts — try refreshing").
+- The gift message excerpt is truncated with `…` at 120 chars. On click the full message is NOT expanded here — the full context is in the Guusto iframe.
+- Expiry date is formatted as relative ("Expires in 10 days") when ≤ 30 days; absolute ("Expires Jun 15, 2026") when > 30 days.
+- **A11y:** Each row is a `<li>`, list is `<ul aria-label="Your gifts">`. CTA buttons include `aria-label="Redeem $2,500 USD gift from Sarah Chen"`.
+
+---
+
+### RR-109 — Redemption expiry watch: in-app banner + email nudge (size: S)
+**Epic:** Employee Gift Redemption UX
+**Phase:** 2
+**Goal:** Reduce expired-gift support tickets by proactively surfacing expiry warnings in CC. A gift that expires un-redeemed is a negative experience that erases the positive recognition moment.
+
+**Technical approach:**
+- Cron-style daily job (or reuse RR-065 job runner) queries `rr_monetary_attachments` for gifts where `status NOT IN ('REDEEMED', 'EXPIRED')` and `expiry_date BETWEEN now() AND now() + interval '14 days'`.
+- For each qualifying gift: if no `expiry_nudge_sent_at` recorded, send an in-app notification (RR-030 channel) AND an email nudge (new template `gift_expiry_nudge` from RR-035 pool).
+- Email: "Your $X gift from [Company] expires in Y days — redeem it before it's gone." Links to `/r/recognition/redeem`.
+- In-app notification: same copy, links to RR-108 inbox page.
+- One nudge per gift per expiry window (don't spam). Send at `expiry_date - 14d` and optionally at `expiry_date - 3d` (configurable, default both on).
+- Mark `expiry_nudge_sent_at` after send.
+
+**Acceptance criteria:**
+- GIVEN a gift expires in 12 days, WHEN the daily job runs, THEN the recipient receives an in-app notification and an email nudge (once).
+- GIVEN a gift expires in 1 day (missed the 14-day window), WHEN the 3-day nudge job runs, THEN the 3-day nudge is sent.
+- GIVEN the gift is already redeemed when the job runs, THEN no nudge is sent.
+- GIVEN `expiry_nudge_sent_at` is already set, WHEN the job runs again, THEN no duplicate is sent.
+
+**Unit tests:**
+- `test_nudge_not_sent_for_fully_redeemed_gift()`
+- `test_nudge_sent_once_per_window()`
+- `test_no_duplicate_on_job_rerun()`
+- `test_email_template_renders_correct_days_remaining()`
+
+**Dependencies:** RR-030, RR-035, RR-067, RR-108
+**Out of scope:** push notification (Phase 3); admin-configurable nudge cadence (Phase 3); per-user opt-out of expiry emails (Phase 3).
+
+**Events fired:** `gift_expiry_nudge_sent` (server-side, one per recipient per gift per nudge window). Properties: `recognition_id`, `days_until_expiry`, `channel` (email|in_app), `nudge_window` (14d|3d). This event feeds into M2 (Notification-to-Action) conversion analysis — compare `gift_expiry_nudge_sent` → `redemption_cta_clicked` to see whether nudges actually drive redemption.
+
+**Design notes:**
+- Email subject: "Your reward is expiring soon 🎁" (test against "Don't let your $X gift expire").
+- In-app notification uses warning/amber tone — not error red (it hasn't expired yet, it's a heads-up).
+- Link from both channels goes directly to the gift row in RR-108 (deep-link by `gift_id` parameter).
+
+---
+
 ### RR-101 — 48-hour post-recognition micro-survey (size: M)
 **Epic:** Recognition Compose & Feed (cross-cutting with Frontline Delivery)
 **Phase:** 1
@@ -2192,8 +2567,10 @@ The Guusto public API is **8 endpoints, no webhooks, no catalog API, no auth/rat
 | P1-5 | Comments + reactions | RR-045 (reactions only — comments deferred, see RR-100) |
 | P1-6 | Values analytics | RR-021 |
 | P1-7 | Budget rollover & expiry | RR-053, RR-054 |
+| P1-8 | Employee home feed | RR-102, RR-103, RR-104, RR-105, RR-106 |
+| P2-9 | Employee gift redemption UX (CC-native inbox + badge + expiry nudge) | RR-107, RR-108, RR-109 |
 
-**Total ticket count:** ~80 (Phase 0: 5, Phase 1: ~30, Phase 2: ~30, cross-cutting + Phase 3 epics: ~15).
+**Total ticket count:** ~83 (Phase 0: 5, Phase 1: ~30, Phase 2: ~33 [+3 redemption UX], cross-cutting + Phase 3 epics: ~15).
 
 ---
 
@@ -2226,8 +2603,8 @@ Covered by at least one ticket: `recognition_composed` (RR-013), `recognition_se
 ### Phase boundary check (vs. PRD §11)
 
 - **Phase 0 (Hackathon):** 5 tickets (RR-001–005). Matches PRD §11 "1–2 days" scope.
-- **Phase 1 (Social MVP):** ~22 tickets after RR-033 reassignment (excludes Teams). PRD §11 Phase 1 scope includes compose, feed, profile, manager dashboard, AI drafting, Slack, admin config — all covered. Frontline SMS/QR (RR-035–037) is aggressive vs. PRD (which lists SMS in Phase 2) but defensible because it's non-monetary; flag for scope review.
-- **Phase 2 (Monetary):** ~20 tickets. Aligned with PRD's "8–10 weeks, 4–5 sprints" budget given M sizes.
+- **Phase 1 (Social MVP):** ~27 tickets after RR-033 reassignment and addition of RR-102–106 (employee home feed epic). PRD §11 Phase 1 scope includes compose, feed, profile, manager dashboard, AI drafting, Slack, admin config — all covered. Employee home feed (P1-8, RR-102–106) was previously missing from the ticket backlog despite being Screen 1 of the product map; now covered. Frontline SMS/QR (RR-035–037) is aggressive vs. PRD (which lists SMS in Phase 2) but defensible because it's non-monetary; flag for scope review.
+- **Phase 2 (Monetary):** ~23 tickets (+3 from RR-107/108/109 redemption UX epic, P2-9). RR-107/108/109 fill a documented PRD gap: the CC-native surfaces (navbar badge, redemption inbox, expiry nudge) that surround the Guusto iFrame (RR-075) were specified at the iFrame level but not at the product/UX level. Now covered.
 - **Phase 3 (Integrations & Deep Analytics):** epic stubs only (RR-090–099) plus newly reassigned RR-033. Matches PRD §11 Phase 3.
 - **Cross-cutting:** 7 tickets (RR-080–089, RR-100). Reasonable.
 

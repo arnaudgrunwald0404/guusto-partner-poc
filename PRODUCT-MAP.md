@@ -225,9 +225,55 @@ ACCOUNT
 
 ---
 
-## Screen 4: Redeem Gifts — Claim Flow
+## Screen 4: Redeem Gifts — Full Redemption Flow
 
-**Screenshot evidence:** `showcase-2026-frame-012.png`
+> **PRD gap identified April 2026:** The original map only documented the post-claim two-panel state. Screenshots from Arnaud's live Guusto account (April 2026) revealed three additional undocumented steps: (1) the pre-claim single-panel state where the employee must explicitly accept the gift, (2) the gift card merchant-selection modal (distinct from Screen 5's physical-product detail path), and (3) the "Are you sure?" irrevocability confirmation. All four steps are documented here for completeness.
+
+---
+
+### Step 4-A: Pre-claim state — gift not yet accepted
+
+**Screenshot evidence:** Arnaud's live Guusto account, April 2026 (described; screenshot forthcoming)
+
+```
+┌───────────────────────────────────────────────────────────┐
+│  ← Back to Gifts                                          │
+│                                                           │
+│  ┌──────────────────────────────────────────────────────┐ │
+│  │ RECOGNITION CARD (full width — right panel hidden)   │ │
+│  │                                                      │ │
+│  │ [Gift / trophy graphic]                              │ │
+│  │ To: Arnaud Grunwald                                  │ │
+│  │ From: ClearCo Hackathon                              │ │
+│  │ $2,500 USD                                           │ │
+│  │                                                      │ │
+│  │ [Recognition message / reason tag]                   │ │
+│  │                                                      │ │
+│  │        ┌──────────────────────────┐                  │ │
+│  │        │  Claim Gift to Account   │                  │ │
+│  │        └──────────────────────────┘                  │ │
+│  │                                                      │ │
+│  │   (right panel does not appear until claimed)        │ │
+│  └──────────────────────────────────────────────────────┘ │
+└───────────────────────────────────────────────────────────┘
+```
+
+**Key UI observations:**
+- Right panel ("Available to Redeem") is hidden until the recipient explicitly claims
+- The "Claim Gift to Account" button is the acceptance action — this is a deliberate two-step: receive → claim → redeem
+- The navbar "To Redeem" counter increments AFTER the claim action (not on gift delivery)
+- This two-step prevents accidental redemption and gives the recipient time to consider
+
+**CC integration decisions:**
+- 🔵 This step occurs inside Guusto's iFrame in Phase 1 — CC does not orchestrate the claim action
+- 🟢 In Phase 3 (native), CC should preserve the deliberate two-step: "Accept gift" → redemption panel appears. Do NOT auto-claim.
+- **Design note:** The claim step is a low-friction but psychologically important moment — the employee intentionally "owns" the recognition. Removing it would make the redemption feel mechanical.
+
+---
+
+### Step 4-B: Post-claim state — redemption controls visible
+
+**Screenshot evidence:** Arnaud's live Guusto account, April 2026
 
 ```
 ┌───────────────────────────────────────────────────────────┐
@@ -236,42 +282,178 @@ ACCOUNT
 │  ┌──────────────────────┐  ┌─────────────────────────┐   │
 │  │ RECOGNITION CARD     │  │ Available to Redeem      │   │
 │  │                      │  │                          │   │
-│  │ [Trophy emoji]       │  │ Remaining Amount:        │   │
-│  │ Reason: Employee     │  │ $150.00 USD              │   │
-│  │ Appreciation         │  │                          │   │
-│  │ To: Meredith Palmer  │  │ Enter Amount to Redeem:  │   │
+│  │ [Gift graphic]       │  │ Remaining Amount:        │   │
+│  │ To: Arnaud Grunwald  │  │ $2,490.00 USD            │   │
+│  │ From: ClearCo        │  │                          │   │
+│  │   Hackathon          │  │ Enter Amount to Redeem:  │   │
 │  │                      │  │ [USA (USD) ▾] [$ ___]   │   │
-│  │ [GIF: Michael Scott  │  │                          │   │
-│  │  and Dwight]         │  │ Select a Merchant →      │   │
-│  │                      │  │                          │   │
-│  │ "Your exceptional    │  │ Redeemed Amounts:        │   │
-│  │  leadership skills   │  │ (empty — not yet         │   │
-│  │  have made a         │  │  redeemed)               │   │
-│  │  significant         │  │                          │   │
-│  │  impact..."          │  └─────────────────────────┘   │
-│  │                      │                                  │
-│  │ From: Michael Scott  │                                  │
-│  │                      │                                  │
-│  │ $150 USD             │                                  │
-│  └──────────────────────┘                                  │
+│  │ $2,500 USD           │  │                          │   │
+│  │                      │  │  [Select a Merchant →]   │   │
+│  │ [Recognition message │  │                          │   │
+│  │  / reason / sender]  │  │ Redeemed Amounts:        │   │
+│  │                      │  │  Baskin Robbins  $10.00  │   │
+│  └──────────────────────┘  └─────────────────────────┘   │
 └───────────────────────────────────────────────────────────┘
 ```
 
 **Key UI observations:**
-- Left panel: the full recognition card (reason, GIF/image, full message, sender name, dollar amount)
-- Right panel: redemption controls — remaining amount, amount-to-redeem entry, currency selector, "Select a Merchant" CTA
-- Partial redemption is supported (recipient can redeem less than the full amount and save the rest)
-- "Redeemed Amounts" section tracks history of partial redemptions on this gift
+- Both panels are now visible after claiming
+- Left: full recognition card — sender, organization, message, dollar value (immutable; CC-originated data rendered in Guusto)
+- Right: redemption controls — remaining balance ($2,490 because $10 was already used), amount-to-redeem input (free-entry up to remaining), currency selector, "Select a Merchant" CTA
+- **Partial redemption is fully supported** — employee can redeem $35 today, save the remaining $2,455 for later; "Redeemed Amounts" section is a running history
+- "Select a Merchant" is the entry to the gift-card merchant-selection flow (Step 4-C below); the amount entered here carries into the selection modal
 
 **CC integration decisions:**
-- 🔵 This entire screen is the Guusto iFrame embedded in CC's shell in Phase 1
-- The left card (recognition content) is passed from CC to Guusto at gift issuance — this is CC-originated data rendered in Guusto's UI
-- 🟢 In Phase 3 (API migration), CC builds this screen natively, preserving the two-panel layout
-- **Design note:** The split-panel layout (recognition card left, redeem controls right) is the right UX. Don't collapse it to a single column — the recognition card on the left is essential context for why the reward exists.
+- 🔵 Entire post-claim redemption surface is Guusto-hosted in Phase 1 (iFrame via RR-075)
+- Left card content is CC data passed to Guusto at gift issuance
+- 🟢 Phase 3 (native API build): CC owns this layout natively. The split-panel layout (recognition context left, redeem controls right) is the right UX — do NOT collapse to a single column. The recognition card earns its place.
+- **Key constraint:** the "Remaining Amount" comes from Guusto's balance API, not from CC's ledger. CC's copy of the balance is always slightly stale (polling lag). In Phase 3, prefer the Guusto-side balance as the source of truth for the right panel.
 
 ---
 
-## Screen 5: Catalog — Merchant Selection
+### Step 4-C: Select Redemption — gift card merchant list modal
+
+**Screenshot evidence:** Arnaud's live Guusto account, April 2026
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  Select Redemption                               │   │
+│  │                                                  │   │
+│  │  [🔍 Search merchants...]                        │   │
+│  │                                                  │   │
+│  │  ┌────────────────────────────────────────────┐  │   │
+│  │  │  [Aerie logo]       Aerie                  │  │   │
+│  │  │  [Aeropostale logo] Aeropostale             │  │   │
+│  │  │  [Airbnb logo]      Airbnb                  │  │   │
+│  │  │  [Amazon logo]      Amazon                  │  │   │
+│  │  │  [...]              ...                     │  │   │
+│  │  └────────────────────────────────────────────┘  │   │
+│  │                                                  │   │
+│  └──────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Key UI observations:**
+- Modal with search bar + scrollable merchant list
+- Each row: merchant logo + name
+- This is the **gift card redemption path** — the employee picks a merchant and receives a store-value gift card at that merchant for the entered dollar amount
+- **Distinct from Screen 5** (physical product detail with size selector): Screen 5 is the physical-product catalog path; this modal is the open-value gift card path. Guusto supports both. In the ClearCompany integration, only the gift card path is expected for Phase 1/2.
+- No catalog API: Guusto does not expose this merchant list via API — it is entirely Guusto-hosted UI. CC never renders this list.
+
+**CC integration decisions:**
+- 🔵 Entirely Guusto-owned in Phase 1 (iFrame) and Phase 3 (Guusto-hosted catalog; CC cannot replicate)
+- **Design note for Phase 3:** Even when CC builds the redemption surface natively, the merchant list must remain Guusto-hosted. CC's role is to hand off `amount + recipient_token`; Guusto's role is to show the catalog and process the gift card issuance.
+
+---
+
+### Step 4-D: Irrevocability confirmation modal
+
+**Screenshot evidence:** Arnaud's live Guusto account, April 2026
+
+```
+┌────────────────────────────────────────────────────────┐
+│  ┌────────────────────────────────────────────────┐    │
+│  │  Are you sure?                                 │    │
+│  │                                                │    │
+│  │  Redeem $35 USD for Airbnb                     │    │
+│  │                                                │    │
+│  │  [Airbnb logo]                                 │    │
+│  │                                                │    │
+│  │  ☐ I understand this merchant selection        │    │
+│  │    cannot be changed                           │    │
+│  │                                                │    │
+│  │         [Cancel]       [Confirm ▶]             │    │
+│  │                                                │    │
+│  └────────────────────────────────────────────────┘    │
+└────────────────────────────────────────────────────────┘
+```
+
+**Key UI observations:**
+- "Are you sure?" framing — this is a deliberate friction gate, not a dismissable confirmation toast
+- States the exact amount and merchant clearly before confirming
+- **Required checkbox:** "I understand this merchant selection cannot be changed" — Confirm button is disabled until checked
+- Cancel always available — the employee can back out until the checkbox is checked and Confirm is clicked
+- This is an irreversible action: once confirmed, the gift card is issued and the amount is deducted from the remaining balance
+
+**CC integration decisions:**
+- 🔵 Guusto-hosted — CC does not replicate this modal in Phase 1 or Phase 3
+- **Design note:** Do NOT remove the irrevocability warning in any white-label version. It protects both the employee (support escalations) and the employer (budget audit trail). If CC ever builds a native confirmation step for Phase 3, preserve the checkbox UX verbatim.
+
+---
+
+**Summary of integration boundaries for Screen 4:**
+
+| Step | Who owns it | Phase 1 | Phase 3 |
+|------|-------------|---------|---------|
+| 4-A: Pre-claim (gift card pending) | Guusto | iFrame | CC-native |
+| 4-B: Post-claim redemption controls | Guusto | iFrame | CC-native |
+| 4-C: Merchant selection modal | Guusto (no API) | iFrame | Guusto-hosted forever |
+| 4-D: Irrevocability confirmation | Guusto | iFrame | Guusto-hosted forever |
+
+---
+
+## Screen 4e: CC-Native Redemption Inbox (ClearCompany builds this)
+
+> **PRD gap identified April 2026:** The existing PRD documents Guusto's redemption screens but does not specify the ClearCompany-side surfaces that precede the Guusto iFrame. These are **CC-owned** surfaces: the redemption badge in CC's primary navigation and the "Redeem Gifts" inbox page that lists outstanding gifts before handing off to Guusto.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  CC Global Navigation                                           │
+│  [Logo]  [Performance] [Onboarding] [R&R ●3] [...]  [👤]      │
+│                              ↑                                  │
+│                     badge shows pending gift count             │
+└─────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│  Rewards & Recognition    [Home] [My Recognition] [Redeem ●3]   │
+│                                                                  │
+│  Redeem Your Gifts                                               │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │  🎁  ClearCo Hackathon                    $2,500 USD       │  │
+│  │      "Your exceptional work on the Q1…"                   │  │
+│  │      Sent by Sarah Chen · Expires Jun 15, 2026            │  │
+│  │                             [Redeem Now →]                 │  │
+│  ├────────────────────────────────────────────────────────────┤  │
+│  │  🎁  ClearCo Hackathon                       $25 USD       │  │
+│  │      "Great job on the customer call!"                     │  │
+│  │      Sent by Sarah Chen · Expires May 30, 2026            │  │
+│  │                             [Redeem Now →]                 │  │
+│  ├────────────────────────────────────────────────────────────┤  │
+│  │  ✅  Amazon Gift Card                        $50 USD       │  │
+│  │      Redeemed Apr 2, 2026                                  │  │
+│  │                          [View confirmation]               │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                  │
+│  [Load more]                                                     │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Key UI decisions (CC-native):**
+- The badge in the global nav (and in the R&R secondary nav tab) shows the count of gifts available to redeem (claimed but not fully redeemed OR not yet claimed)
+- The inbox is an employee-facing list — not the sender's view, not the manager's view
+- Each row: org/sender name, recognition message excerpt, dollar amount, expiry date, status
+- **Status states per row:** `Available` (claimed, balance remaining) | `Unclaimed` (sent, not yet claimed) | `Redeemed` (fully spent) | `Expired`
+- "Redeem Now" CTA opens the Guusto iFrame (RR-075) or a direct Guusto URL
+- Fully redeemed and expired gifts remain visible in history (not deleted)
+
+**Badge count logic:**
+- Badge = count of gifts where `status IN ('UNCLAIMED', 'AVAILABLE')` (i.e., any gift with remaining balance or awaiting claim)
+- Badge goes to 0 when all gifts are either fully redeemed or expired
+- Badge does NOT include gifts already fully redeemed (those are history, not actionable)
+- **Per the user's description:** the count increments from 0→N after the employee performs the "claim" action in Guusto, because Guusto's balance API then shows a positive remaining balance. CC polls for this change (no webhook). Until the claim happens, the gift shows as "Unclaimed."
+
+**CC integration decisions:**
+- 🟢 CC builds this inbox natively — this is a CC-owned surface, not an iFrame
+- Data source: `rr_monetary_attachments` table (CC's local copy, populated by RR-067/RR-071 pollers) plus Guusto balance API for live remaining amounts
+- The "Redeem Now" button launches RR-075 (signed-token iFrame or direct Guusto link)
+- 🟢 Badge count is CC-computed from the local table (polling lag acceptable for badge; do not call Guusto on every page load)
+- **Expiry tracking:** CC must store and display expiry dates. Source: Guusto's order details (RR-067). Expiry warning: show amber "Expires in X days" when ≤14 days remain.
+
+---
+
+## Screen 5: Catalog — Physical Product Detail
 
 **Screenshot evidence:** `showcase-2026-frame-013.png`, `showcase-2026-frame-014.png`
 
