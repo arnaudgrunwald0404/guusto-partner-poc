@@ -240,6 +240,127 @@ describe('classifyTranscript()', () => {
     expect(systemBlock.cache_control).toEqual({ type: 'ephemeral' });
   });
 
+  // ---------------------------------------------------------------------------
+  // Disqualifier tests — real examples from product feedback (April 2026)
+  // ---------------------------------------------------------------------------
+
+  it('DISQUALIFIER A: pure thank-you with name → below_threshold', async () => {
+    // "Perfect. Thank you so much, Holly. I really do appreciate it."
+    // Polite social courtesy, no substance about Holly's exceptional qualities.
+    mockCreate.mockResolvedValueOnce(
+      mockToolUseResponse({
+        is_exceptional_praise: false,
+        confidence: 0.25,
+        employee_name_mentioned: 'Holly',
+        evidence_quote: null,
+        sentiment_magnitude: 'low',
+        recognition_draft: null,
+        reasoning: 'Disqualifier A: Pure thank-you. No substantive description of exceptional conduct or character.',
+      })
+    );
+
+    const result = await classifyTranscript(
+      'Perfect. Thank you so much, Holly. I really do appreciate it.'
+    );
+
+    expect(result.result).toBe('below_threshold');
+  });
+
+  it('DISQUALIFIER B: job-function praise (subject matter expert) → below_threshold', async () => {
+    // "She's a subject matter expert on the LMS. If you have questions, ask her — she's a wealth of knowledge."
+    // Being a product expert is the expected job role, not exceptional conduct.
+    mockCreate.mockResolvedValueOnce(
+      mockToolUseResponse({
+        is_exceptional_praise: false,
+        confidence: 0.40,
+        employee_name_mentioned: null,
+        evidence_quote: null,
+        sentiment_magnitude: 'moderate',
+        recognition_draft: null,
+        reasoning: "Disqualifier B: Praise describes employee's job function (subject matter expert). No above-and-beyond conduct identified.",
+      })
+    );
+
+    const result = await classifyTranscript(
+      "She's a lot. She's kind of a subject matter expert also on the LMS. So, if you have any questions around your account, ask because she is a wealth of knowledge for sure."
+    );
+
+    expect(result.result).toBe('below_threshold');
+  });
+
+  it('DISQUALIFIER C: normal sales duty (demoing product) → below_threshold', async () => {
+    // "Lauren put in effort demoing your product." — Running a demo is core sales duty.
+    mockCreate.mockResolvedValueOnce(
+      mockToolUseResponse({
+        is_exceptional_praise: false,
+        confidence: 0.35,
+        employee_name_mentioned: 'Lauren',
+        evidence_quote: null,
+        sentiment_magnitude: 'low',
+        recognition_draft: null,
+        reasoning: 'Disqualifier C: Praise is for running a product demo — a standard sales activity, not exceptional conduct.',
+      })
+    );
+
+    const result = await classifyTranscript(
+      "I know that if Lauren were here, she would want me to thank you for all his effort that he put in, you know, demoing your product."
+    );
+
+    expect(result.result).toBe('below_threshold');
+  });
+
+  it('DISQUALIFIER D: product praise with employee incidentally named → below_threshold', async () => {
+    // "Harissa took me through the program. It looks pretty straightforward… love it."
+    // Customer loves the product; Harissa is the guide, not the subject of exceptional praise.
+    mockCreate.mockResolvedValueOnce(
+      mockToolUseResponse({
+        is_exceptional_praise: false,
+        confidence: 0.30,
+        employee_name_mentioned: 'Harissa',
+        evidence_quote: null,
+        sentiment_magnitude: 'low',
+        recognition_draft: null,
+        reasoning: "Disqualifier D: Enthusiasm ('love it', 'pretty straightforward') is directed at the product, not the employee. Harissa is mentioned incidentally as a guide.",
+      })
+    );
+
+    const result = await classifyTranscript(
+      "What was her name? Took me through the program? Harissa? Yep. When she took me through? Yeah, it looks pretty straightforward really… love. It."
+    );
+
+    expect(result.result).toBe('below_threshold');
+  });
+
+  it('TRUE POSITIVE: personal character + professionalism + integrity → classified', async () => {
+    // "I am so grateful that you are our rep because I think that you have handled
+    //  the situation incredibly professionally, and also with a lot of integrity."
+    // — Personal character praise (integrity, professionalism in a specific situation),
+    //   strong emotional language ("so grateful"), no product component.
+    mockCreate.mockResolvedValueOnce(
+      mockToolUseResponse({
+        is_exceptional_praise: true,
+        confidence: 0.93,
+        employee_name_mentioned: 'Sarah', // name from surrounding transcript context
+        evidence_quote: 'I think that you have handled the situation incredibly professionally, and also with a lot of integrity.',
+        sentiment_magnitude: 'very_high',
+        recognition_draft:
+          'A customer said on a recent call: "I think that you have handled the situation incredibly professionally, and also with a lot of integrity." That kind of feedback is rare — thank you for representing ClearCompany with such care.',
+        reasoning: 'Strong personal character praise (integrity, professionalism in specific situation), strong emotional language ("so grateful"), no product or routine-duty component. No disqualifiers apply.',
+      })
+    );
+
+    const result = await classifyTranscript(
+      'I am so grateful that you are our rep because I think that you have handled the situation incredibly professionally, and also with a lot of integrity.'
+    );
+
+    expect(result.result).toBe('classified');
+    if (result.result === 'classified') {
+      expect(result.data.confidence).toBeGreaterThanOrEqual(0.75);
+      expect(result.data.sentiment_magnitude).toBe('very_high');
+      expect(result.data.recognition_draft).toBeTruthy();
+    }
+  });
+
   it('structured output schema validates — all required fields present', async () => {
     const toolInput = {
       is_exceptional_praise: true,

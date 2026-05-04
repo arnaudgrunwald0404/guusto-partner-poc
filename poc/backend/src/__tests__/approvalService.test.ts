@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'crypto';
 
 // ---------------------------------------------------------------------------
-// In-memory store for rr_approvals rows
+// In-memory stores
 // ---------------------------------------------------------------------------
 
 interface ApprovalRow {
@@ -26,7 +26,16 @@ interface ApprovalRow {
   decision: string | null;
 }
 
+interface IdentifyRow {
+  id: string;
+  classification_id: string;
+  token_hash: string;
+  expires_at: string;
+  used_at: string | null;
+}
+
 const approvalStore = new Map<string, ApprovalRow>();
+const identifyStore = new Map<string, IdentifyRow>();
 
 // ---------------------------------------------------------------------------
 // Mock DB
@@ -70,6 +79,34 @@ vi.mock('../db/schema.js', () => ({
           },
         };
       }
+      // INSERT INTO rr_identify_tokens
+      if (sql.includes('INSERT INTO rr_identify_tokens')) {
+        return {
+          run: (id: string, classification_id: string, token_hash: string, expires_at: string) => {
+            identifyStore.set(token_hash, { id, classification_id, token_hash, expires_at, used_at: null });
+            return { changes: 1 };
+          },
+        };
+      }
+      // SELECT * FROM rr_identify_tokens WHERE token_hash = ?
+      if (sql.includes('SELECT * FROM rr_identify_tokens WHERE token_hash')) {
+        return {
+          get: (token_hash: string) => identifyStore.get(token_hash) ?? undefined,
+        };
+      }
+      // UPDATE rr_identify_tokens SET used_at
+      if (sql.includes('UPDATE rr_identify_tokens SET used_at')) {
+        return {
+          run: (used_at: string, token_hash: string) => {
+            const row = identifyStore.get(token_hash);
+            if (row && row.used_at === null) {
+              identifyStore.set(token_hash, { ...row, used_at });
+              return { changes: 1 };
+            }
+            return { changes: 0 };
+          },
+        };
+      }
       // Fallback — should not be hit in these tests
       return { run: () => ({ changes: 0 }), get: () => undefined };
     },
@@ -92,6 +129,9 @@ import {
   createApprovalToken,
   validateToken,
   recordDecision,
+  createIdentifyToken,
+  validateIdentifyToken,
+  consumeIdentifyToken,
 } from '../services/approvalService.js';
 
 // ---------------------------------------------------------------------------
@@ -100,6 +140,7 @@ import {
 
 beforeEach(() => {
   approvalStore.clear();
+  identifyStore.clear();
   vi.restoreAllMocks();
 });
 
@@ -208,5 +249,89 @@ describe('recordDecision', () => {
 
     const row = approvalStore.get(tokenHash);
     expect(row?.decision).toBe('approved'); // first write wins
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Identify tokens
+// ---------------------------------------------------------------------------
+
+describe('createIdentifyToken', () => {
+  it('returns token, hash, and 48h expiry', () => {
+    const now = new Date('2026-04-29T12:00:00.000Z');
+    vi.setSystemTime(now);
+
+    const result = createIdentifyToken('cls-001');
+
+    expect(result.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.tokenHash).toBe(sha256hex(result.token));
+    const expectedExpiry = new Date(now.getTime() + 48 * 60 * 60 * 1000).toISOString();
+    expect(result.expiresAt).toBe(expectedExpiry);
+  });
+
+  it('stores row in identify store', () => {
+    const result = createIdentifyToken('cls-002');
+    const stored = identifyStore.get(result.tokenHash);
+    expect(stored?.classification_id).toBe('cls-002');
+    expect(stored?.used_at).toBeNull();
+  });
+});
+
+describe('validateIdentifyToken', () => {
+  it('returns valid: true for a fresh token', () => {
+    vi.setSystemTime(new Date('2026-04-29T12:00:00.000Z'));
+    const { token } = createIdentifyToken('cls-003');
+
+    const result = validateIdentifyToken(token);
+    expect(result.valid).toBe(true);
+    if (result.valid) expect(result.classification_id).toBe('cls-003');
+  });
+
+  it('returns not_found for unknown token', () => {
+    const result = validateIdentifyToken('0'.repeat(64));
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.reason).toBe('not_found');
+  });
+
+  it('returns expired for a token past its TTL', () => {
+    vi.setSystemTime(new Date('2026-04-29T12:00:00.000Z'));
+    const { token } = createIdentifyToken('cls-004');
+
+    vi.setSystemTime(new Date('2026-05-01T13:00:00.000Z'));
+    const result = validateIdentifyToken(token);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.reason).toBe('expired');
+  });
+
+  it('returns already_used after consumeIdentifyToken', () => {
+    vi.setSystemTime(new Date('2026-04-29T12:00:00.000Z'));
+    const { token } = createIdentifyToken('cls-005');
+    consumeIdentifyToken(token);
+
+    const result = validateIdentifyToken(token);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.reason).toBe('already_used');
+  });
+});
+
+describe('consumeIdentifyToken', () => {
+  it('marks token as used', () => {
+    vi.setSystemTime(new Date('2026-04-29T12:00:00.000Z'));
+    const { token, tokenHash } = createIdentifyToken('cls-006');
+    consumeIdentifyToken(token);
+
+    const row = identifyStore.get(tokenHash);
+    expect(row?.used_at).not.toBeNull();
+  });
+
+  it('second consume is a no-op (used_at not overwritten)', () => {
+    vi.setSystemTime(new Date('2026-04-29T12:00:00.000Z'));
+    const { token, tokenHash } = createIdentifyToken('cls-007');
+    consumeIdentifyToken(token);
+    const firstUsedAt = identifyStore.get(tokenHash)?.used_at;
+
+    vi.setSystemTime(new Date('2026-04-29T14:00:00.000Z'));
+    consumeIdentifyToken(token);
+    expect(identifyStore.get(tokenHash)?.used_at).toBe(firstUsedAt);
   });
 });
