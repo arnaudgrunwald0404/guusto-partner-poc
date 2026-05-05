@@ -58,6 +58,7 @@ export interface RecognitionRow {
   classification_id: string;
   employee_id: string;
   employee_first_name: string | null;
+  employee_last_name: string | null;
   manager_id: string | null;
   evidence_quote: string | null;
   recognition_message: string | null;

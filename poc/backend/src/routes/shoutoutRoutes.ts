@@ -215,6 +215,7 @@ shoutoutRouter.post('/', async (req: Request, res: Response): Promise<void> => {
       senderEmail: sender.email,
       recipientEmail: recipient.email,
       recipientFirstName: recipient.firstName,
+      recipientLastName: recipient.lastName,
       amountCents: giftCents,
       message: message.trim(),
     });

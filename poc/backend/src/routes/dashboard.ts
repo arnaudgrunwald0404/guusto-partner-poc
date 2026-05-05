@@ -352,11 +352,11 @@ dashboardRouter.get('/approve-by-id', (req: Request, res: Response) => {
 
   // Fire Guusto reward (fire-and-forget — gracefully skips if creds missing)
   const recRow = db.prepare(`
-    SELECT r.employee_first_name, r.recognition_message, r.reward_amount_cents,
+    SELECT r.employee_first_name, r.employee_last_name, r.recognition_message, r.reward_amount_cents,
            c.employee_email, c.manager_email
     FROM rr_recognitions r LEFT JOIN rr_classifications c ON c.id = r.classification_id
     WHERE r.id = ?
-  `).get(recognition_id) as { employee_first_name: string; recognition_message: string; reward_amount_cents: number; employee_email: string | null; manager_email: string | null } | undefined;
+  `).get(recognition_id) as { employee_first_name: string; employee_last_name: string | null; recognition_message: string; reward_amount_cents: number; employee_email: string | null; manager_email: string | null } | undefined;
 
   if (recRow) {
     void (async () => {
@@ -365,11 +365,12 @@ dashboardRouter.get('/approve-by-id', (req: Request, res: Response) => {
           recognitionId: recognition_id,
           employeeEmail: recRow.employee_email ?? 'employee@demo.com',
           employeeFirstName: recRow.employee_first_name ?? 'the employee',
+          employeeLastName: recRow.employee_last_name ?? '',
           managerEmail: process.env.MANAGER_EMAIL ?? recRow.manager_email ?? 'manager@demo.com',
           recognitionMessage: recRow.recognition_message ?? '',
           amountCents: recRow.reward_amount_cents,
         });
-        void pollOrderStatus(requestId, recognition_id, recRow.employee_first_name ?? 'the employee', process.env.MANAGER_EMAIL ?? recRow.manager_email ?? 'manager@demo.com');
+        void pollOrderStatus(requestId, recognition_id, recRow.employee_first_name ?? 'the employee', recRow.employee_last_name ?? '', process.env.MANAGER_EMAIL ?? recRow.manager_email ?? 'manager@demo.com');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (!msg.includes('not set')) console.error('[dashboard] Guusto order failed:', err);

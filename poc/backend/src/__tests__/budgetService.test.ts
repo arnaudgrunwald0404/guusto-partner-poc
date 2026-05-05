@@ -60,7 +60,7 @@ function makeDb() {
       if (sql.includes('INSERT INTO rr_budget_ledger')) {
         return {
           run: (...args: unknown[]) => {
-            const [id, manager_id, amount_cents, entry_type, ...rest] = args as [string, string, number, string, ...unknown[]];
+            const [id, manager_id, amount_cents, entry_type] = args as [string, string, number, string, ...unknown[]];
             ledger.push({ id, manager_id, amount_cents, entry_type, created_at: new Date().toISOString() });
             return { changes: 1 };
           },

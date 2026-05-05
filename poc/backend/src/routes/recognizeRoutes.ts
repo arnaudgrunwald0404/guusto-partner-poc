@@ -17,7 +17,7 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { getDb } from '../db/schema.js';
-import { STUB_EMPLOYEES } from '../services/employeeResolver.js';
+import { loadDirectory } from '../services/employeeResolver.js';
 import { placeGuustoOrder, pollOrderStatus } from '../services/guustoService.js';
 
 export const recognizeRouter = Router();
@@ -58,7 +58,7 @@ recognizeRouter.post('/', async (req: Request, res: Response): Promise<void> => 
   }
 
   // --- Look up employee ---
-  const employee = STUB_EMPLOYEES.find(e => e.id === employeeId);
+  const employee = loadDirectory().find(e => e.id === employeeId);
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
@@ -80,13 +80,13 @@ recognizeRouter.post('/', async (req: Request, res: Response): Promise<void> => 
       employee_name_mentioned, evidence_quote, sentiment_magnitude,
       recognition_draft, reasoning, status,
       employee_id, manager_id, manager_email, manager_first_name,
-      employee_email, employee_first_name, created_at
+      employee_email, employee_first_name, employee_last_name, created_at
     ) VALUES (
       ?, 'manual', 1, 1.0,
       ?, ?, 'very_high',
       ?, ?, 'resolved',
       ?, ?, ?, ?,
-      ?, ?, ?
+      ?, ?, ?, ?
     )
   `).run(
     classificationId,
@@ -100,21 +100,23 @@ recognizeRouter.post('/', async (req: Request, res: Response): Promise<void> => 
     managerFirstName,
     employee.email,
     employee.firstName,
+    employee.lastName,
     now,
   );
 
   // --- Write recognition row ---
   db.prepare(`
     INSERT INTO rr_recognitions (
-      id, classification_id, employee_id, employee_first_name,
+      id, classification_id, employee_id, employee_first_name, employee_last_name,
       manager_id, evidence_quote, recognition_message,
       reward_amount_cents, reward_status, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 2500, 'pending', ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2500, 'pending', ?)
   `).run(
     recognitionId,
     classificationId,
     employee.id,
     employee.firstName,
+    employee.lastName,
     employee.managerId,
     message.trim(),
     message.trim(),
@@ -135,11 +137,12 @@ recognizeRouter.post('/', async (req: Request, res: Response): Promise<void> => 
         recognitionId,
         employeeEmail: employee.email,
         employeeFirstName: employee.firstName,
+        employeeLastName: employee.lastName,
         managerEmail,
         recognitionMessage: message.trim(),
         amountCents: 2500,
       });
-      void pollOrderStatus(requestId, recognitionId, employee.firstName, managerEmail);
+      void pollOrderStatus(requestId, recognitionId, employee.firstName, employee.lastName, managerEmail);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('not set')) {

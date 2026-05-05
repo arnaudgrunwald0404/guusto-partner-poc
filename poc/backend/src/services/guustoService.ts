@@ -67,6 +67,7 @@ export interface PlaceOrderParams {
   recognitionId: string;
   employeeEmail: string;
   employeeFirstName: string;
+  employeeLastName: string;
   managerEmail: string;
   recognitionMessage: string;
   amountCents: number;
@@ -297,6 +298,7 @@ export async function pollOrderStatus(
   requestId: string,
   recognitionId: string,
   employeeFirstName: string,
+  employeeLastName: string,
   managerEmail: string
 ): Promise<void> {
   const db = getDb();
@@ -349,7 +351,7 @@ export async function pollOrderStatus(
 
       // Notify manager
       try {
-        await sendFailureEmail({ managerEmail, employeeFirstName });
+        await sendFailureEmail({ managerEmail, employeeFirstName, employeeLastName });
       } catch (emailErr) {
         console.error('[guusto] Failed to send failure email:', emailErr);
       }

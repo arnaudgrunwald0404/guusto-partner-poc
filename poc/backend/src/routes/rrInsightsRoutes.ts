@@ -14,8 +14,20 @@
 
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/schema.js';
-import { STUB_EMPLOYEES } from '../services/employeeResolver.js';
 import { getShoutoutFeed } from '../services/shoutoutService.js';
+
+interface EmployeeRow {
+  id: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  email: string;
+  title: string | null;
+  department: string | null;
+  office: string | null;
+  manager_email: string | null;
+  manager_name: string | null;
+}
 
 export const rrInsightsRouter = Router();
 
@@ -46,13 +58,13 @@ function avatarColorForId(employeeId: string): string {
 
 rrInsightsRouter.get('/nudges/people-to-recognize', (req: Request, res: Response): void => {
   try {
-    const managerId = (req.query['managerId'] as string | undefined) ?? 'mgr_001';
+    const managerId = (req.query['managerId'] as string | undefined) ?? 'adefazio@clearcompany.com';
     const limit = Math.min(20, Math.max(1, parseInt((req.query['limit'] as string) ?? '5', 10)));
 
     const db = getDb();
 
     // Resolve direct reports for the given manager
-    const directReports = STUB_EMPLOYEES.filter(e => e.managerId === managerId);
+    const directReports = db.prepare('SELECT * FROM rr_employees WHERE manager_email = ?').all(managerId) as EmployeeRow[];
 
     if (directReports.length === 0) {
       res.json({ nudges: [] });
@@ -81,8 +93,8 @@ rrInsightsRouter.get('/nudges/people-to-recognize', (req: Request, res: Response
 
       return {
         employeeId: emp.id,
-        firstName: emp.firstName,
-        lastName: emp.lastName,
+        firstName: emp.first_name,
+        lastName: emp.last_name,
         title: emp.title ?? null,
         department: emp.department ?? null,
         avatarColor: avatarColorForId(emp.id),
@@ -169,15 +181,19 @@ rrInsightsRouter.get('/leaderboard', (req: Request, res: Response): void => {
       `).all(periodStart, limit) as Array<{ person_id: string; count: number }>;
     }
 
-    // Build employee lookup map
-    const empMap = new Map(STUB_EMPLOYEES.map(e => [e.id, e]));
+    // Build employee lookup map from DB
+    const ids = rows.map(r => r.person_id);
+    const empRows = ids.length > 0
+      ? db.prepare(`SELECT * FROM rr_employees WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as EmployeeRow[]
+      : [];
+    const empMap = new Map(empRows.map(e => [e.id, e]));
 
     const leaderboard = rows.map((row, idx) => {
       const emp = empMap.get(row.person_id);
       return {
         employeeId: row.person_id,
-        firstName: emp?.firstName ?? row.person_id,
-        lastName: emp?.lastName ?? '',
+        firstName: emp?.first_name ?? row.person_id,
+        lastName: emp?.last_name ?? '',
         title: emp?.title ?? null,
         avatarColor: avatarColorForId(row.person_id),
         count: row.count,
@@ -224,20 +240,19 @@ rrInsightsRouter.get('/feed/home', (req: Request, res: Response): void => {
       return;
     }
 
-    // scope === 'team': find all teammates (people who share the same managerId,
+    // scope === 'team': find all teammates (people who share the same manager_email,
     // plus the manager themselves) and return shoutouts where sender or recipient
     // is in that set.
-    const requestingUser = STUB_EMPLOYEES.find(e => e.id === userId);
+    const db = getDb();
+    const requestingUser = db.prepare('SELECT * FROM rr_employees WHERE id = ?').get(userId) as EmployeeRow | undefined;
     let teammateIds: Set<string>;
 
     if (requestingUser) {
       // Teammates = anyone managed by the same manager + the manager themselves
-      const myManagerId = requestingUser.managerId;
-      const sameTeam = myManagerId
-        ? STUB_EMPLOYEES.filter(
-            e => e.managerId === myManagerId || e.id === myManagerId,
-          )
-        : [requestingUser];
+      const sameTeam = requestingUser.manager_email
+        ? db.prepare('SELECT id FROM rr_employees WHERE manager_email = ? OR id = ?')
+            .all(requestingUser.manager_email, requestingUser.manager_email) as {id: string}[]
+        : [{ id: userId }];
 
       teammateIds = new Set(sameTeam.map(e => e.id));
       // Always include the requesting user themselves
@@ -247,7 +262,6 @@ rrInsightsRouter.get('/feed/home', (req: Request, res: Response): void => {
       teammateIds = new Set([userId]);
     }
 
-    const db = getDb();
     const idList = Array.from(teammateIds);
     const placeholders = idList.map(() => '?').join(', ');
 

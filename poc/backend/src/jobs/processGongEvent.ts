@@ -312,10 +312,10 @@ export async function processGongEvent(eventId: string): Promise<void> {
       employee_name_mentioned, evidence_quote, sentiment_magnitude,
       recognition_draft, reasoning, status,
       employee_id, manager_id, manager_email, manager_first_name,
-      employee_email, employee_first_name, created_at
+      employee_email, employee_first_name, employee_last_name, created_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, 'resolved',
-      ?, ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?, ?, ?
     )
   `).run(
     classificationId,
@@ -333,6 +333,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
     employee.managerFirstName,
     employee.email,
     employee.firstName,
+    employee.lastName,
     now
   );
 
@@ -341,15 +342,16 @@ export async function processGongEvent(eventId: string): Promise<void> {
 
   db.prepare(`
     INSERT INTO rr_recognitions (
-      id, classification_id, employee_id, employee_first_name,
+      id, classification_id, employee_id, employee_first_name, employee_last_name,
       manager_id, evidence_quote, recognition_message,
       reward_amount_cents, reward_status, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 2500, 'pending', ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2500, 'pending', ?)
   `).run(
     recognitionId,
     classificationId,
     employee.id,
     employee.firstName,
+    employee.lastName,
     employee.managerId,
     classData.evidence_quote,
     classData.recognition_draft,
@@ -364,6 +366,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
 
     await sendApprovalEmail({
       employeeFirstName: employee.firstName,
+      employeeLastName: employee.lastName,
       managerEmail,
       evidenceQuote: classData.evidence_quote ?? '',
       recognitionDraft: classData.recognition_draft ?? '',

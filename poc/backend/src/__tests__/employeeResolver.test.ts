@@ -12,12 +12,42 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { resolveEmployee, STUB_EMPLOYEES } from '../services/employeeResolver.js';
+import { resolveEmployee } from '../services/employeeResolver.js';
 import type { Employee } from '../types.js';
 
 // ---------------------------------------------------------------------------
-// Extended directory for ambiguity tests (adds a second "Samuel")
+// Self-contained test directory — independent of DB or STUB_EMPLOYEES
 // ---------------------------------------------------------------------------
+
+const STUB_EMPLOYEES: Employee[] = [
+  {
+    id: 'emp_001',
+    firstName: 'Samuel',
+    lastName: 'Abramsky',
+    email: 'samuel@clearcompany.com',
+    managerId: 'mgr_001',
+    managerEmail: 'rachael@clearcompany.com',
+    managerFirstName: 'Rachael',
+  },
+  {
+    id: 'emp_002',
+    firstName: 'Jordan',
+    lastName: 'Beaman',
+    email: 'jordan@clearcompany.com',
+    managerId: 'mgr_001',
+    managerEmail: 'rachael@clearcompany.com',
+    managerFirstName: 'Rachael',
+  },
+  {
+    id: 'emp_003',
+    firstName: 'Maddy',
+    lastName: 'Bender',
+    email: 'maddy@clearcompany.com',
+    managerId: 'mgr_002',
+    managerEmail: 'david@clearcompany.com',
+    managerFirstName: 'David',
+  },
+];
 
 const EXTENDED_DIRECTORY: Employee[] = [
   ...STUB_EMPLOYEES,
@@ -27,7 +57,7 @@ const EXTENDED_DIRECTORY: Employee[] = [
     lastName: 'Rivera',
     email: 'agrunwald+99@clearcompany.com',
     managerId: 'mgr_002',
-    managerEmail: 'agrunwald+1@clearcompany.com',
+    managerEmail: 'david@clearcompany.com',
     managerFirstName: 'David',
   },
 ];

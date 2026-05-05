@@ -41,6 +41,25 @@ function makeDb() {
 
 vi.mock('../db/schema.js', () => ({ getDb: () => makeDb() }));
 
+// Provide a minimal test directory so employee lookup works without real DB
+vi.mock('../services/employeeResolver.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/employeeResolver.js')>();
+  const TEST_EMPLOYEE = {
+    id: 'emp_test_001',
+    firstName: 'Jane',
+    lastName: 'Doe',
+    email: 'jane@clearcompany.com',
+    managerId: 'mgr_001',
+    managerEmail: 'manager@clearcompany.com',
+    managerFirstName: 'Manager',
+  };
+  return {
+    ...actual,
+    STUB_EMPLOYEES: [TEST_EMPLOYEE],
+    loadDirectory: () => [TEST_EMPLOYEE],
+  };
+});
+
 // Suppress fire-and-forget Guusto calls
 vi.mock('../services/guustoService.js', () => ({
   placeGuustoOrder: vi.fn().mockRejectedValue(new Error('GUUSTO_BEARER_TOKEN or GUUSTO_WORKSPACE_ID not set')),
@@ -74,7 +93,7 @@ function buildApp() {
 const LONG_MESSAGE = 'A'.repeat(160); // 160 chars — over the 150 minimum
 
 const VALID_BODY = {
-  employeeId: 'arnaud', // from STUB_EMPLOYEES
+  employeeId: 'emp_test_001',
   reason: 'Customer Focus',
   message: LONG_MESSAGE,
 };

@@ -11,8 +11,20 @@
 
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/schema.js';
-import { STUB_EMPLOYEES } from '../services/employeeResolver.js';
 import { getBalance, getLedger } from '../services/budgetService.js';
+
+interface EmployeeRow {
+  id: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  email: string;
+  title: string | null;
+  department: string | null;
+  office: string | null;
+  manager_email: string | null;
+  manager_name: string | null;
+}
 
 export const managerRouter = Router();
 
@@ -91,9 +103,9 @@ managerRouter.get('/suggestions', (req: Request, res: Response): void => {
     confidence: number | null;
   }>;
 
-  // Filter to this manager's direct reports (by employee_id lookup in stub directory)
+  // Filter to this manager's direct reports (by employee_id lookup in DB)
   const directReportIds = new Set(
-    STUB_EMPLOYEES.filter(e => e.managerId === managerId).map(e => e.id)
+    (db.prepare('SELECT id FROM rr_employees WHERE manager_email = ?').all(managerId) as {id: string}[]).map(r => r.id)
   );
 
   // If manager has no matching direct reports in the stub, return all suggestions
@@ -138,8 +150,8 @@ managerRouter.get('/team', (req: Request, res: Response): void => {
     10,
   );
 
-  // Direct reports from stub directory
-  const directReports = STUB_EMPLOYEES.filter(e => e.managerId === managerId);
+  // Direct reports from DB
+  const directReports = db.prepare('SELECT * FROM rr_employees WHERE manager_email = ?').all(managerId) as EmployeeRow[];
 
   const teamData = directReports.map(emp => {
     const received = (db.prepare(
@@ -169,7 +181,7 @@ managerRouter.get('/team', (req: Request, res: Response): void => {
 
     return {
       employeeId: emp.id,
-      name: `${emp.firstName} ${emp.lastName}`,
+      name: `${emp.first_name} ${emp.last_name}`,
       email: emp.email,
       recognitionsReceived: received,
       recognitionsSent: sent,

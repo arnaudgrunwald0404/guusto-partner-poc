@@ -15,6 +15,7 @@ import type { Employee } from '../types.js';
 
 export interface SendApprovalEmailParams {
   employeeFirstName: string;
+  employeeLastName: string;
   managerEmail: string;
   evidenceQuote: string;
   recognitionDraft: string;
@@ -44,6 +45,7 @@ export interface SendIdentifyEmailParams {
 export interface SendFailureEmailParams {
   managerEmail: string;
   employeeFirstName: string;
+  employeeLastName: string;
 }
 
 export interface SendRecognitionNotificationParams {
@@ -72,7 +74,7 @@ function getResend(): Resend {
 // ---------------------------------------------------------------------------
 
 function buildApprovalEmailHtml(params: SendApprovalEmailParams): string {
-  const { employeeFirstName, evidenceQuote, recognitionDraft, callUrl, callTitle, approveUrl, editUrl, dismissUrl } = params;
+  const { employeeFirstName, employeeLastName, evidenceQuote, recognitionDraft, callUrl, callTitle, approveUrl, editUrl, dismissUrl } = params;
 
   // Escape HTML entities to prevent injection
   const esc = (s: string): string =>
@@ -82,7 +84,7 @@ function buildApprovalEmailHtml(params: SendApprovalEmailParams): string {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
 
-  const name = esc(employeeFirstName);
+  const name = esc(employeeLastName ? `${employeeFirstName} ${employeeLastName}` : employeeFirstName);
   const quote = esc(evidenceQuote);
   const draft = esc(recognitionDraft);
   const gongLinkHtml = callUrl
@@ -189,11 +191,12 @@ function buildApprovalEmailHtml(params: SendApprovalEmailParams): string {
 }
 
 function buildApprovalEmailText(params: SendApprovalEmailParams): string {
-  const { employeeFirstName, evidenceQuote, recognitionDraft, approveUrl, editUrl, dismissUrl } = params;
+  const { employeeFirstName, employeeLastName, evidenceQuote, recognitionDraft, approveUrl, editUrl, dismissUrl } = params;
+  const fullName = employeeLastName ? `${employeeFirstName} ${employeeLastName}` : employeeFirstName;
   return `
 A CUSTOMER SAID SOMETHING EXCEPTIONAL
 
-${employeeFirstName} just got a rave review
+${fullName} just got a rave review
 
 "${evidenceQuote}"
 From a recent Gong call
@@ -204,11 +207,11 @@ PROPOSED RECOGNITION
 
 ${recognitionDraft}
 
-$25 reward — sent to ${employeeFirstName}'s email
+$25 reward — sent to ${fullName}'s email
 
 ---
 
-This takes 10 seconds. One click and ${employeeFirstName} gets recognized.
+This takes 10 seconds. One click and ${fullName} gets recognized.
 
 Approve & Send — $25 reward:
 ${approveUrl}
@@ -223,7 +226,7 @@ These links expire in 48 hours. After that, no reward will be sent.
 
 ---
 
-You're receiving this because you manage ${employeeFirstName} in ClearCompany.
+You're receiving this because you manage ${fullName} in ClearCompany.
 This recognition was suggested by ClearCompany's AI based on a Gong call transcript.
 You are in control — no reward fires without your approval.
 
@@ -241,7 +244,8 @@ ClearCompany · 101 Main Street, Anytown, USA · Unsubscribe from R&R manager al
 export async function sendApprovalEmail(params: SendApprovalEmailParams): Promise<void> {
   const resend = getResend();
   const from = process.env.RESEND_FROM_EMAIL ?? 'rewards@info.tacticalsync.com';
-  const subject = `Recognition opportunity: ${params.employeeFirstName} praised by a customer`;
+  const fullName = params.employeeLastName ? `${params.employeeFirstName} ${params.employeeLastName}` : params.employeeFirstName;
+  const subject = `Recognition opportunity: ${fullName} praised by a customer`;
 
   const { error } = await resend.emails.send({
     from,
@@ -485,20 +489,21 @@ export async function sendFailureEmail(params: SendFailureEmailParams): Promise<
   const resend = getResend();
   const from = process.env.RESEND_FROM_EMAIL ?? 'rewards@info.tacticalsync.com';
 
+  const fullName = params.employeeLastName ? `${params.employeeFirstName} ${params.employeeLastName}` : params.employeeFirstName;
   const { error } = await resend.emails.send({
     from,
     to: params.managerEmail,
-    subject: `Action needed: ${params.employeeFirstName}'s recognition reward failed to deliver`,
+    subject: `Action needed: ${fullName}'s recognition reward failed to deliver`,
     text: `Hi,
 
-We were unable to deliver the $25 reward to ${params.employeeFirstName}'s inbox after you approved their recognition.
+We were unable to deliver the $25 reward to ${fullName}'s inbox after you approved their recognition.
 
-No funds were charged. Please try recognizing ${params.employeeFirstName} manually from their ClearCompany employee profile, or contact support if the problem persists.
+No funds were charged. Please try recognizing ${fullName} manually from their ClearCompany employee profile, or contact support if the problem persists.
 
 — ClearCompany Recognition System`,
     html: `<p>Hi,</p>
-<p>We were unable to deliver the $25 reward to <strong>${params.employeeFirstName}</strong>'s inbox after you approved their recognition.</p>
-<p>No funds were charged. Please try recognizing ${params.employeeFirstName} manually from their ClearCompany employee profile, or contact support if the problem persists.</p>
+<p>We were unable to deliver the $25 reward to <strong>${fullName}</strong>'s inbox after you approved their recognition.</p>
+<p>No funds were charged. Please try recognizing ${fullName} manually from their ClearCompany employee profile, or contact support if the problem persists.</p>
 <p>— ClearCompany Recognition System</p>`,
   });
 

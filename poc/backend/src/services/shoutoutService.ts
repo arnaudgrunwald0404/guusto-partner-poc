@@ -45,6 +45,7 @@ export interface AttachGiftParams {
   senderEmail: string;
   recipientEmail: string;
   recipientFirstName: string;
+  recipientLastName?: string;
   amountCents: number;
   message: string;
 }
@@ -179,6 +180,7 @@ export async function attachGuustoGift(params: AttachGiftParams): Promise<void> 
       recognitionId: params.shoutoutId,   // shoutout_id reused as the order reference
       employeeEmail: params.recipientEmail,
       employeeFirstName: params.recipientFirstName,
+      employeeLastName: params.recipientLastName ?? '',
       managerEmail: params.senderEmail,
       recognitionMessage: params.message,
       amountCents: params.amountCents,
@@ -193,6 +195,7 @@ export async function attachGuustoGift(params: AttachGiftParams): Promise<void> 
       requestId,
       params.shoutoutId,
       params.recipientFirstName,
+      params.recipientLastName ?? '',
       params.senderEmail,
     ).then(() => {
       syncGiftStatusFromOrder(requestId, params.shoutoutId, params.senderId, params.amountCents);

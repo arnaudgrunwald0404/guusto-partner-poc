@@ -13,8 +13,20 @@
 
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/schema.js';
-import { STUB_EMPLOYEES } from '../services/employeeResolver.js';
 import { getRedemptionUrl } from '../services/guustoService.js';
+
+interface EmployeeRow {
+  id: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  email: string;
+  title: string | null;
+  department: string | null;
+  office: string | null;
+  manager_email: string | null;
+  manager_name: string | null;
+}
 
 export const employeeProfileRouter = Router();
 
@@ -27,13 +39,13 @@ employeeProfileRouter.get('/:id/recognitions', (req: Request, res: Response): vo
   const requesterRole = (req.headers['x-user-role'] as string) || 'employee';
   const targetId = req.params.id;
 
-  const employee = STUB_EMPLOYEES.find(e => e.id === targetId);
+  const db = getDb();
+  const employee = db.prepare('SELECT * FROM rr_employees WHERE id = ?').get(targetId) as EmployeeRow | undefined;
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
   }
 
-  const db = getDb();
   const { page, limit } = req.query as { page?: string; limit?: string };
   const pageNum = Math.max(1, parseInt(page ?? '1', 10));
   const limitNum = Math.min(50, Math.max(1, parseInt(limit ?? '20', 10)));
@@ -42,7 +54,7 @@ employeeProfileRouter.get('/:id/recognitions', (req: Request, res: Response): vo
   // Amount visibility: recipient, sender, direct manager, or admin
   const canSeeAmount =
     requesterId === targetId ||
-    requesterId === employee.managerId ||
+    requesterId === employee.manager_email ||
     requesterRole === 'hr_admin';
 
   // Visibility filter: peers can only see company/team shoutouts, not private
@@ -126,7 +138,7 @@ employeeProfileRouter.get('/:id/recognitions', (req: Request, res: Response): vo
 
   res.json({
     employeeId: targetId,
-    employeeName: `${employee.firstName} ${employee.lastName}`,
+    employeeName: `${employee.first_name} ${employee.last_name}`,
     items: allItems,
     total,
     page: pageNum,
@@ -146,7 +158,8 @@ employeeProfileRouter.get('/:id/recognitions/sent', (req: Request, res: Response
   const targetId = req.params.id;
 
   // Only the sender themselves, their manager, or an admin can see sent history
-  const employee = STUB_EMPLOYEES.find(e => e.id === targetId);
+  const db = getDb();
+  const employee = db.prepare('SELECT * FROM rr_employees WHERE id = ?').get(targetId) as EmployeeRow | undefined;
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
@@ -154,7 +167,7 @@ employeeProfileRouter.get('/:id/recognitions/sent', (req: Request, res: Response
 
   const canView =
     requesterId === targetId ||
-    requesterId === employee.managerId ||
+    requesterId === employee.manager_email ||
     requesterRole === 'hr_admin';
 
   if (!canView) {
@@ -162,7 +175,6 @@ employeeProfileRouter.get('/:id/recognitions/sent', (req: Request, res: Response
     return;
   }
 
-  const db = getDb();
   const { page, limit } = req.query as { page?: string; limit?: string };
   const pageNum = Math.max(1, parseInt(page ?? '1', 10));
   const limitNum = Math.min(50, Math.max(1, parseInt(limit ?? '20', 10)));
@@ -214,13 +226,12 @@ employeeProfileRouter.get('/:id/recognitions/sent', (req: Request, res: Response
 
 employeeProfileRouter.get('/:id/summary', (req: Request, res: Response): void => {
   const targetId = req.params.id;
-  const employee = STUB_EMPLOYEES.find(e => e.id === targetId);
+  const db = getDb();
+  const employee = db.prepare('SELECT * FROM rr_employees WHERE id = ?').get(targetId) as EmployeeRow | undefined;
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
   }
-
-  const db = getDb();
   const since90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
 
   const received90 = (db.prepare(
@@ -249,7 +260,7 @@ employeeProfileRouter.get('/:id/summary', (req: Request, res: Response): void =>
 
   res.json({
     employeeId: targetId,
-    name: `${employee.firstName} ${employee.lastName}`,
+    name: `${employee.first_name} ${employee.last_name}`,
     email: employee.email,
     last90Days: { received: received90, sent: sent90 },
     topValues,
@@ -281,13 +292,12 @@ employeeProfileRouter.get('/:id/gifts', (req: Request, res: Response): void => {
     return;
   }
 
-  const employee = STUB_EMPLOYEES.find(e => e.id === targetId);
+  const db = getDb();
+  const employee = db.prepare('SELECT * FROM rr_employees WHERE id = ?').get(targetId) as EmployeeRow | undefined;
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
   }
-
-  const db = getDb();
 
   // Join orders to shoutouts (Phase 1+ flow) and legacy recognitions
   const orders = db.prepare(`

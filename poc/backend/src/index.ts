@@ -41,6 +41,15 @@
  *     GET  /api/rr/nudges/people-to-recognize  recognition nudges for manager
  *     GET  /api/rr/leaderboard                 top employees by recognition count
  *     GET  /api/rr/feed/home                   company or team-scoped feed
+ *
+ *   Org chart (backed by rr_employees — seeded from HRM User Report):
+ *     GET  /api/rr/org/employee/:email         single employee card + direct report count
+ *     GET  /api/rr/org/team/:email             direct reports for a manager
+ *     GET  /api/rr/org/peers/:email            employees sharing the same manager
+ *     GET  /api/rr/org/chain/:email            reporting chain from employee up to root
+ *     GET  /api/rr/org/subtree/:email          full recursive subtree (all reports)
+ *     GET  /api/rr/org/stats                   org-wide analytics (dept, span, depth)
+ *     GET  /api/rr/org/search?q=               name / title / dept search
  */
 
 import dotenv from 'dotenv';
@@ -63,6 +72,7 @@ import { aiRouter } from './routes/aiRoutes.js';
 import { automationRouter } from './routes/automationRoutes.js';
 import { rrInsightsRouter } from './routes/rrInsightsRoutes.js';
 import { pendingGiftsRouter } from './routes/pendingGiftsRoutes.js';
+import { orgChartRouter } from './routes/orgChartRoutes.js';
 import { runGuustoBalanceCheck } from './services/guustoService.js';
 
 const app = express();
@@ -155,6 +165,7 @@ app.use('/api/rr/admin', adminRouter);
 app.use('/api/rr/admin/automations', automationRouter);
 app.use('/api/rr', rrInsightsRouter);
 app.use('/api/rr/recipient', pendingGiftsRouter);
+app.use('/api/rr/org', orgChartRouter);
 
 // Public read of active company values — any authenticated user may fetch these
 // (admin/values requires hr_admin; this serves the compose drawer for managers)

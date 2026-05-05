@@ -30,13 +30,15 @@ function sha256hex(input: string): string {
   return createHash('sha256').update(input).digest('hex');
 }
 
-/** Returns the employee first name for a recognition_id, or 'the employee'. */
+/** Returns the employee full name for a recognition_id, or 'the employee'. */
 function getEmployeeName(recognitionId: string): string {
   const db = getDb();
   const row = db
-    .prepare('SELECT employee_first_name FROM rr_recognitions WHERE id = ?')
-    .get(recognitionId) as Pick<RecognitionRow, 'employee_first_name'> | undefined;
-  return row?.employee_first_name ?? 'the employee';
+    .prepare('SELECT employee_first_name, employee_last_name FROM rr_recognitions WHERE id = ?')
+    .get(recognitionId) as Pick<RecognitionRow, 'employee_first_name' | 'employee_last_name'> | undefined;
+  const first = row?.employee_first_name ?? '';
+  const last = row?.employee_last_name ?? '';
+  return first ? (last ? `${first} ${last}` : first) : 'the employee';
 }
 
 /** Update reward_status on the recognition row. */
@@ -55,14 +57,14 @@ function updateRewardStatus(recognitionId: string, status: string): void {
 function triggerGuustoReward(recognitionId: string): void {
   const db = getDb();
   const row = db.prepare(`
-    SELECT r.id, r.employee_id, r.employee_first_name, r.evidence_quote,
+    SELECT r.id, r.employee_id, r.employee_first_name, r.employee_last_name, r.evidence_quote,
            r.recognition_message, r.reward_amount_cents,
            c.employee_email, c.manager_email
     FROM rr_recognitions r
     LEFT JOIN rr_classifications c ON c.id = r.classification_id
     WHERE r.id = ?
   `).get(recognitionId) as {
-    id: string; employee_id: string; employee_first_name: string;
+    id: string; employee_id: string; employee_first_name: string; employee_last_name: string | null;
     evidence_quote: string | null; recognition_message: string | null;
     reward_amount_cents: number; employee_email: string | null; manager_email: string | null;
   } | undefined;
@@ -81,11 +83,12 @@ function triggerGuustoReward(recognitionId: string): void {
         recognitionId,
         employeeEmail,
         employeeFirstName: row.employee_first_name ?? 'the employee',
+        employeeLastName: row.employee_last_name ?? '',
         managerEmail,
         recognitionMessage: row.recognition_message ?? row.evidence_quote ?? '',
         amountCents: row.reward_amount_cents,
       });
-      void pollOrderStatus(requestId, recognitionId, row.employee_first_name ?? 'the employee', managerEmail);
+      void pollOrderStatus(requestId, recognitionId, row.employee_first_name ?? 'the employee', row.employee_last_name ?? '', managerEmail);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('not set')) {
@@ -326,15 +329,16 @@ approvalRouter.get('/identify', async (req: Request, res: Response): Promise<voi
 
   db.prepare(`
     INSERT INTO rr_recognitions (
-      id, classification_id, employee_id, employee_first_name,
+      id, classification_id, employee_id, employee_first_name, employee_last_name,
       manager_id, evidence_quote, recognition_message,
       reward_amount_cents, reward_status, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 2500, 'pending', ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2500, 'pending', ?)
   `).run(
     recognitionId,
     classification.id,
     employee.id,
     employee.firstName,
+    employee.lastName,
     employee.managerId,
     classification.evidence_quote,
     classification.recognition_draft,
@@ -344,10 +348,10 @@ approvalRouter.get('/identify', async (req: Request, res: Response): Promise<voi
   // Update classification with resolved employee info
   db.prepare(`
     UPDATE rr_classifications
-    SET employee_id=?, employee_first_name=?, manager_id=?, manager_email=?,
+    SET employee_id=?, employee_first_name=?, employee_last_name=?, manager_id=?, manager_email=?,
         manager_first_name=?, employee_email=?, status='resolved'
     WHERE id=?
-  `).run(employee.id, employee.firstName, employee.managerId, employee.managerEmail,
+  `).run(employee.id, employee.firstName, employee.lastName, employee.managerId, employee.managerEmail,
          employee.managerFirstName, employee.email, classification.id);
 
   // Update the gong_event status
@@ -362,6 +366,7 @@ approvalRouter.get('/identify', async (req: Request, res: Response): Promise<voi
 
     await sendApprovalEmail({
       employeeFirstName: employee.firstName,
+      employeeLastName: employee.lastName,
       managerEmail,
       evidenceQuote: classification.evidence_quote ?? '',
       recognitionDraft: classification.recognition_draft ?? '',

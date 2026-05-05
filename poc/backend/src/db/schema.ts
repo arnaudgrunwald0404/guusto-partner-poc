@@ -70,6 +70,7 @@ function initSchema(db: Database.Database): void {
       manager_first_name      TEXT,
       employee_email          TEXT,
       employee_first_name     TEXT,
+      employee_last_name      TEXT,
       created_at              TEXT NOT NULL
     );
 
@@ -79,6 +80,7 @@ function initSchema(db: Database.Database): void {
       classification_id   TEXT NOT NULL,
       employee_id         TEXT NOT NULL,
       employee_first_name TEXT,
+      employee_last_name  TEXT,
       manager_id          TEXT,
       evidence_quote      TEXT,
       recognition_message TEXT,
@@ -228,6 +230,30 @@ function initSchema(db: Database.Database): void {
       updated_at TEXT NOT NULL
     );
 
+    -- -------------------------------------------------------------------------
+    -- Employee directory (seeded from HRM export, replaces STUB_EMPLOYEES)
+    -- -------------------------------------------------------------------------
+
+    CREATE TABLE IF NOT EXISTS rr_employees (
+      id            TEXT PRIMARY KEY,  -- email address (stable identifier)
+      first_name    TEXT NOT NULL,
+      last_name     TEXT NOT NULL,
+      full_name     TEXT NOT NULL,
+      email         TEXT NOT NULL UNIQUE,
+      title         TEXT,
+      department    TEXT,
+      office        TEXT,
+      manager_email TEXT,              -- FK → rr_employees.email (nullable for top-level)
+      manager_name  TEXT,
+      seeded_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_rr_employees_manager
+      ON rr_employees(manager_email);
+
+    CREATE INDEX IF NOT EXISTS idx_rr_employees_dept
+      ON rr_employees(department);
+
     -- Automation rules — AI-configured R&R workflows
     -- trigger_config and conditions are JSON blobs.
     CREATE TABLE IF NOT EXISTS rr_automation_rules (
@@ -326,71 +352,70 @@ function seedDefaults(db: Database.Database): void {
        '2026-04-15T00:00:00Z', '2026-04-15T00:00:00Z');
   `);
 
-  // Seed Q2 2026 budget allocations for demo managers
+  // Seed Q2 2026 budget allocations — real manager emails from rr_employees
   db.exec(`
     INSERT OR IGNORE INTO rr_budget_ledger (id, manager_id, amount_cents, entry_type, created_by, note, created_at) VALUES
-      ('led_seed_001', 'mgr_001', 50000, 'allocation', 'admin', 'Q2 2026 initial allocation', '2026-04-01T00:00:00Z'),
-      ('led_seed_002', 'mgr_002', 50000, 'allocation', 'admin', 'Q2 2026 initial allocation', '2026-04-01T00:00:00Z'),
-      ('led_seed_003', 'mgr_003', 50000, 'allocation', 'admin', 'Q2 2026 initial allocation', '2026-04-01T00:00:00Z'),
-      ('led_seed_004', 'mgr_004', 50000, 'allocation', 'admin', 'Q2 2026 initial allocation', '2026-04-01T00:00:00Z');
+      ('led_seed_001', 'adefazio@clearcompany.com',  50000, 'allocation', 'admin', 'Q2 2026 initial allocation', '2026-04-01T00:00:00Z'),
+      ('led_seed_002', 'sheaden@clearcompany.com',   50000, 'allocation', 'admin', 'Q2 2026 initial allocation', '2026-04-01T00:00:00Z'),
+      ('led_seed_003', 'kbezier@clearcompany.com',   50000, 'allocation', 'admin', 'Q2 2026 initial allocation', '2026-04-01T00:00:00Z'),
+      ('led_seed_004', 'agrunwald@clearcompany.com', 50000, 'allocation', 'admin', 'Q2 2026 initial allocation', '2026-04-01T00:00:00Z');
   `);
 
-  // Seed a few demo shoutouts so the feed isn't empty on first launch
+  // Seed demo shoutouts — real employees from rr_employees (email as ID)
+  // CS team: Anna DeFazio's group; Eng team: Sean Headen's group; ADR: Kristen Bezier's group
   db.exec(`
     INSERT OR IGNORE INTO rr_shoutouts
       (id, sender_id, sender_name, recipient_id, recipient_name, recipient_email,
        message, visibility, source, created_at)
     VALUES
-      ('sht_seed_001', 'mgr_001', 'Rachael Alpert',
-       'emp_001', 'Samuel Abramsky', 'agrunwald+4@clearcompany.com',
-       'Samuel handled the Acme Corp escalation with incredible poise — stayed on a 3-hour call until the customer was fully resolved, then followed up with a detailed summary and next-steps doc the same evening. That kind of ownership is exactly what sets us apart.',
+      ('sht_seed_001', 'adefazio@clearcompany.com', 'Anna DeFazio',
+       'tbadeen@clearcompany.com', 'Tom Badeen', 'tbadeen@clearcompany.com',
+       'Tom handled the Acme Corp escalation with incredible poise — stayed on a 3-hour call until the customer was fully resolved, then followed up with a detailed summary and next-steps doc the same evening. That kind of ownership is exactly what sets us apart.',
        'company', 'direct', '2026-04-25T10:00:00Z'),
 
-      ('sht_seed_002', 'emp_003', 'Maddy Bender',
-       'emp_002', 'Jordan Beaman', 'agrunwald+5@clearcompany.com',
-       'Jordan''s new enterprise onboarding playbook is a masterpiece. The level of detail — real workflow diagrams, role-specific checklists, FAQ from the first 20 customers — meant our newest client was fully live in 18 days. She didn''t just document a process, she engineered a better one.',
+      ('sht_seed_002', 'dgormley@clearcompany.com', 'Dylan Gormley',
+       'tpariso@clearcompany.com', 'Taylor Pariso', 'tpariso@clearcompany.com',
+       'Taylor''s new enterprise onboarding playbook is a masterpiece. The level of detail — real workflow diagrams, role-specific checklists, FAQ from the first 20 customers — meant our newest client was fully live in 18 days. She didn''t just document a process, she engineered a better one.',
        'company', 'direct', '2026-04-27T14:30:00Z'),
 
-      ('sht_seed_003', 'mgr_002', 'David Almeida',
-       'emp_003', 'Maddy Bender', 'agrunwald+6@clearcompany.com',
-       'Maddy presented the customer health scoring framework to the leadership team and fielded every tough question with data and composure. The CFO said it was the clearest ROI case she''d seen from the CS team. Maddy represents us all brilliantly when it counts.',
+      ('sht_seed_003', 'sheaden@clearcompany.com', 'Sean Headen',
+       'tpariso@clearcompany.com', 'Taylor Pariso', 'tpariso@clearcompany.com',
+       'Taylor presented the customer health scoring framework to the leadership team and fielded every tough question with data and composure. The CFO said it was the clearest ROI case she''d seen from the CS team. Taylor represents us all brilliantly when it counts.',
        'company', 'direct', '2026-04-28T09:15:00Z'),
 
-      ('sht_seed_004', 'emp_001', 'Samuel Abramsky',
-       'emp_002', 'Jordan Beaman', 'agrunwald+5@clearcompany.com',
-       'Jordan stepped in to unblock a major implementation at 4pm on a Friday when the customer''s SSO configuration completely broke. She stayed on a call for two hours, debugged the IdP config live, updated the integration guide, and had the customer up and running before EOD. That''s the definition of a teammate.',
+      ('sht_seed_004', 'tbadeen@clearcompany.com', 'Tom Badeen',
+       'tpariso@clearcompany.com', 'Taylor Pariso', 'tpariso@clearcompany.com',
+       'Taylor stepped in to unblock a major implementation at 4pm on a Friday when the customer''s SSO configuration completely broke. She stayed on a call for two hours, debugged the IdP config live, updated the integration guide, and had the customer up and running before EOD. That''s the definition of a teammate.',
        'company', 'direct', '2026-04-29T08:00:00Z'),
 
-      ('sht_seed_005', 'mgr_001', 'Rachael Alpert',
-       'emp_003', 'Maddy Bender', 'agrunwald+6@clearcompany.com',
-       'Maddy''s new customer health model is flagging at-risk accounts two full weeks earlier than our previous approach. She built it from scratch using churn data going back three years, ran it by analytics to validate the signal, and rolled it out to the whole team in a single sprint. This is exactly the kind of initiative that moves the needle on retention.',
+      ('sht_seed_005', 'adefazio@clearcompany.com', 'Anna DeFazio',
+       'dgormley@clearcompany.com', 'Dylan Gormley', 'dgormley@clearcompany.com',
+       'Dylan''s new customer health model is flagging at-risk accounts two full weeks earlier than our previous approach. He built it from scratch using churn data going back three years, ran it by analytics to validate the signal, and rolled it out to the whole team in a single sprint. This is exactly the kind of initiative that moves the needle on retention.',
        'company', 'gong', '2026-04-29T16:45:00Z'),
 
-      ('sht_seed_006', 'emp_002', 'Jordan Beaman',
-       'mgr_001', 'Rachael Alpert', 'agrunwald@clearcompany.com',
-       'Rachael has been an incredible leader this quarter. She gave me the space to own the onboarding redesign end-to-end, gave clear feedback at exactly the right moments, and went to bat for our timeline with the exec team when it slipped. I feel genuinely trusted and supported here.',
+      ('sht_seed_006', 'tpariso@clearcompany.com', 'Taylor Pariso',
+       'adefazio@clearcompany.com', 'Anna DeFazio', 'adefazio@clearcompany.com',
+       'Anna has been an incredible leader this quarter. She gave me the space to own the onboarding redesign end-to-end, gave clear feedback at exactly the right moments, and went to bat for our timeline with the exec team when it slipped. I feel genuinely trusted and supported here.',
        'team', 'direct', '2026-04-30T09:00:00Z'),
 
-      ('sht_seed_007', 'emp_003', 'Maddy Bender',
-       'emp_001', 'Samuel Abramsky', 'agrunwald+4@clearcompany.com',
-       'Samuel tracked down a recurring sync issue that had been frustrating one of our largest accounts for six weeks. He dug through logs across three systems, reproduced it in staging, filed a detailed bug report with Engineering, and personally updated the customer every step of the way. Resolved in 48 hours. Textbook customer success.',
+      ('sht_seed_007', 'dgormley@clearcompany.com', 'Dylan Gormley',
+       'kdavid@clearcompany.com', 'Kenny David', 'kdavid@clearcompany.com',
+       'Kenny tracked down a recurring sync issue that had been frustrating one of our largest accounts for six weeks. He dug through logs across three systems, reproduced it in staging, filed a detailed bug report with Engineering, and personally updated the customer every step of the way. Resolved in 48 hours. Textbook client support.',
        'company', 'direct', '2026-04-30T11:30:00Z'),
 
-      -- Engineering team shoutouts (visible in Company feed; in Sarah Chen''s "My Team" scope)
-      ('sht_seed_008', 'mgr_002', 'David Almeida',
-       'emp_005', 'Eddie Amori', 'agrunwald+8@clearcompany.com',
-       'Eddie refactored our core API pipeline this week and cut p99 latency by 38% in a single PR. He had been prototyping the approach quietly for two weeks, validated it in staging, and shipped it with zero downtime. That''s engineering excellence — quiet, thorough, and impactful.',
+      ('sht_seed_008', 'sheaden@clearcompany.com', 'Sean Headen',
+       'aricketson@clearcompany.com', 'Amanda Ricketson', 'aricketson@clearcompany.com',
+       'Amanda refactored our core API pipeline this week and cut p99 latency by 38% in a single PR. She had been prototyping the approach quietly for two weeks, validated it in staging, and shipped it with zero downtime. That''s engineering excellence — quiet, thorough, and impactful.',
        'company', 'direct', '2026-04-28T16:00:00Z'),
 
-      ('sht_seed_009', 'emp_005', 'Eddie Amori',
-       'emp_007', 'Melanie Baravik', 'agrunwald+10@clearcompany.com',
-       'Melanie ran the best discovery sprint I''ve seen in years. She talked to 14 customers in 5 days, synthesized everything into a crisp one-pager with clear themes and tradeoffs, and had a spec ready for the team to review by Friday. Turned ambiguity into a clear path forward.',
+      ('sht_seed_009', 'aricketson@clearcompany.com', 'Amanda Ricketson',
+       'irivard@clearcompany.com', 'Ian Rivard', 'irivard@clearcompany.com',
+       'Ian ran the best technical discovery sprint I''ve seen in years. He talked to 14 stakeholders in 5 days, synthesized everything into a crisp one-pager with clear themes and tradeoffs, and had an architecture proposal ready for the team to review by Friday. Turned ambiguity into a clear path forward.',
        'company', 'direct', '2026-04-29T11:00:00Z'),
 
-      -- Sales team shoutout (visible only in Company feed for Sarah and Arnaud''s exec view)
-      ('sht_seed_010', 'mgr_003', 'Thomas Badeen',
-       'emp_009', 'Jeremy Allen', 'agrunwald+12@clearcompany.com',
-       'Jeremy closed a $240K ARR deal this week that had been stalled for three months. He re-mapped the stakeholders, got a new exec champion, and ran a flawless business value review. Largest new logo of the quarter. The whole sales team should learn from how he re-opened this one.',
+      ('sht_seed_010', 'kbezier@clearcompany.com', 'Kristen Bezier',
+       'cmckeon@clearcompany.com', 'Casey McKeon', 'cmckeon@clearcompany.com',
+       'Casey closed a $240K ARR deal this week that had been stalled for three months. She re-mapped the stakeholders, got a new exec champion, and ran a flawless business value review. Largest new logo of the quarter. The whole ADR team should learn from how she re-opened this one.',
        'company', 'direct', '2026-04-30T14:00:00Z');
   `);
 
@@ -418,32 +443,32 @@ function seedDefaults(db: Database.Database): void {
       ('sht_seed_010', 'val_001', 'Customer at the Core');
   `);
 
-  // Seed a couple of reactions on the demo shoutouts
+  // Seed reactions on demo shoutouts — reactor IDs are real employee emails
   db.exec(`
     INSERT OR IGNORE INTO rr_shoutout_reactions
       (id, shoutout_id, reactor_id, reactor_name, emoji, created_at)
     VALUES
-      ('rxn_seed_001', 'sht_seed_001', 'emp_002', 'Jordan Beaman',  '👏', '2026-04-25T10:05:00Z'),
-      ('rxn_seed_002', 'sht_seed_001', 'emp_003', 'Maddy Bender',   '⭐', '2026-04-25T10:08:00Z'),
-      ('rxn_seed_003', 'sht_seed_001', 'mgr_002', 'David Almeida',  '🙌', '2026-04-25T10:10:00Z'),
-      ('rxn_seed_004', 'sht_seed_002', 'mgr_001', 'Rachael Alpert', '🙌', '2026-04-27T15:00:00Z'),
-      ('rxn_seed_005', 'sht_seed_002', 'emp_001', 'Samuel Abramsky','👏', '2026-04-27T15:02:00Z'),
-      ('rxn_seed_006', 'sht_seed_003', 'emp_001', 'Samuel Abramsky','🔥', '2026-04-28T09:30:00Z'),
-      ('rxn_seed_007', 'sht_seed_003', 'emp_002', 'Jordan Beaman',  '👏', '2026-04-28T09:35:00Z'),
-      ('rxn_seed_008', 'sht_seed_004', 'mgr_001', 'Rachael Alpert', '❤️', '2026-04-29T08:05:00Z'),
-      ('rxn_seed_009', 'sht_seed_004', 'emp_003', 'Maddy Bender',   '🔥', '2026-04-29T08:07:00Z'),
-      ('rxn_seed_010', 'sht_seed_004', 'mgr_002', 'David Almeida',  '👏', '2026-04-29T08:10:00Z'),
-      ('rxn_seed_011', 'sht_seed_005', 'emp_001', 'Samuel Abramsky','🚀', '2026-04-29T17:00:00Z'),
-      ('rxn_seed_012', 'sht_seed_005', 'emp_002', 'Jordan Beaman',  '⭐', '2026-04-29T17:05:00Z'),
-      ('rxn_seed_013', 'sht_seed_006', 'emp_003', 'Maddy Bender',   '❤️', '2026-04-30T09:05:00Z'),
-      ('rxn_seed_014', 'sht_seed_007', 'emp_002', 'Jordan Beaman',  '👏', '2026-04-30T11:35:00Z'),
-      ('rxn_seed_015', 'sht_seed_007', 'mgr_001', 'Rachael Alpert', '⭐', '2026-04-30T11:40:00Z'),
-      ('rxn_seed_016', 'sht_seed_007', 'mgr_002', 'David Almeida',  '🔥', '2026-04-30T11:42:00Z'),
-      ('rxn_seed_017', 'sht_seed_008', 'emp_007', 'Melanie Baravik', '🚀', '2026-04-28T16:15:00Z'),
-      ('rxn_seed_018', 'sht_seed_008', 'emp_006', 'Jake Axsom',      '🔥', '2026-04-28T16:20:00Z'),
-      ('rxn_seed_019', 'sht_seed_009', 'mgr_002', 'David Almeida',   '⭐', '2026-04-29T11:10:00Z'),
-      ('rxn_seed_020', 'sht_seed_009', 'emp_006', 'Jake Axsom',      '👏', '2026-04-29T11:15:00Z'),
-      ('rxn_seed_021', 'sht_seed_010', 'emp_008', 'Lorraine Alexus', '🎉', '2026-04-30T14:05:00Z'),
-      ('rxn_seed_022', 'sht_seed_010', 'emp_010', 'Daironex Batista','🚀', '2026-04-30T14:10:00Z');
+      ('rxn_seed_001', 'sht_seed_001', 'tpariso@clearcompany.com',    'Taylor Pariso',    '👏', '2026-04-25T10:05:00Z'),
+      ('rxn_seed_002', 'sht_seed_001', 'dgormley@clearcompany.com',   'Dylan Gormley',    '⭐', '2026-04-25T10:08:00Z'),
+      ('rxn_seed_003', 'sht_seed_001', 'sheaden@clearcompany.com',    'Sean Headen',      '🙌', '2026-04-25T10:10:00Z'),
+      ('rxn_seed_004', 'sht_seed_002', 'adefazio@clearcompany.com',   'Anna DeFazio',     '🙌', '2026-04-27T15:00:00Z'),
+      ('rxn_seed_005', 'sht_seed_002', 'kdavid@clearcompany.com',     'Kenny David',      '👏', '2026-04-27T15:02:00Z'),
+      ('rxn_seed_006', 'sht_seed_003', 'tbadeen@clearcompany.com',    'Tom Badeen',       '🔥', '2026-04-28T09:30:00Z'),
+      ('rxn_seed_007', 'sht_seed_003', 'tpariso@clearcompany.com',    'Taylor Pariso',    '👏', '2026-04-28T09:35:00Z'),
+      ('rxn_seed_008', 'sht_seed_004', 'adefazio@clearcompany.com',   'Anna DeFazio',     '❤️', '2026-04-29T08:05:00Z'),
+      ('rxn_seed_009', 'sht_seed_004', 'dgormley@clearcompany.com',   'Dylan Gormley',    '🔥', '2026-04-29T08:07:00Z'),
+      ('rxn_seed_010', 'sht_seed_004', 'sheaden@clearcompany.com',    'Sean Headen',      '👏', '2026-04-29T08:10:00Z'),
+      ('rxn_seed_011', 'sht_seed_005', 'tbadeen@clearcompany.com',    'Tom Badeen',       '🚀', '2026-04-29T17:00:00Z'),
+      ('rxn_seed_012', 'sht_seed_005', 'tpariso@clearcompany.com',    'Taylor Pariso',    '⭐', '2026-04-29T17:05:00Z'),
+      ('rxn_seed_013', 'sht_seed_006', 'dgormley@clearcompany.com',   'Dylan Gormley',    '❤️', '2026-04-30T09:05:00Z'),
+      ('rxn_seed_014', 'sht_seed_007', 'tpariso@clearcompany.com',    'Taylor Pariso',    '👏', '2026-04-30T11:35:00Z'),
+      ('rxn_seed_015', 'sht_seed_007', 'adefazio@clearcompany.com',   'Anna DeFazio',     '⭐', '2026-04-30T11:40:00Z'),
+      ('rxn_seed_016', 'sht_seed_007', 'sheaden@clearcompany.com',    'Sean Headen',      '🔥', '2026-04-30T11:42:00Z'),
+      ('rxn_seed_017', 'sht_seed_008', 'irivard@clearcompany.com',    'Ian Rivard',       '🚀', '2026-04-28T16:15:00Z'),
+      ('rxn_seed_018', 'sht_seed_008', 'zritter@clearcompany.com',    'Zach Ritter',      '🔥', '2026-04-28T16:20:00Z'),
+      ('rxn_seed_019', 'sht_seed_009', 'sheaden@clearcompany.com',    'Sean Headen',      '⭐', '2026-04-29T11:10:00Z'),
+      ('rxn_seed_020', 'sht_seed_009', 'abresee@clearcompany.com',    'Allie Bresee',     '👏', '2026-04-29T11:15:00Z'),
+      ('rxn_seed_021', 'sht_seed_010', 'rbay@clearcompany.com',       'Robert Bay',       '🎉', '2026-04-30T14:05:00Z'),
+      ('rxn_seed_022', 'sht_seed_010', 'jcolon@clearcompany.com',     'Julius Colon',     '🚀', '2026-04-30T14:10:00Z');
   `);
 }
