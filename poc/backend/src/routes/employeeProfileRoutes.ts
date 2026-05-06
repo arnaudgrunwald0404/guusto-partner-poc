@@ -333,9 +333,9 @@ employeeProfileRouter.get('/:id/gifts', async (req: Request, res: Response): Pro
     LIMIT 20
   `, [employee.email]);
 
-  const gifts = orders.map(o => {
+  const gifts = await Promise.all(orders.map(async o => {
     // For any shoutout-linked order without a stored URL, try live lookup
-    const redemptionUrl = o.redemption_url ?? getRedemptionUrl(o.recognition_id);
+    const redemptionUrl = o.redemption_url ?? await getRedemptionUrl(o.recognition_id);
     return {
       orderId: o.id,
       recognitionId: o.recognition_id,
@@ -349,7 +349,7 @@ employeeProfileRouter.get('/:id/gifts', async (req: Request, res: Response): Pro
       redeemable: redemptionUrl !== null && o.status === 'COMPLETED',
       createdAt: o.created_at,
     };
-  });
+  }));
 
   res.json({
     employeeId: targetId,

@@ -26,7 +26,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { getDb } from '../db/schema.js';
+import { sqlAll, sqlGet, sqlRun } from '../db/pg.js';
 import { sendFailureEmail } from './emailService.js';
 
 // ---------------------------------------------------------------------------
@@ -147,14 +147,13 @@ export async function getGuustoWorkspaceBalance(currency: string = 'USD'): Promi
   const now = new Date().toISOString();
 
   // Cache into tenant config for admin endpoint / monitoring
-  const db = getDb();
-  const upsert = db.prepare(`
+  const upsertSql = `
     INSERT INTO rr_tenant_config (key, value, updated_at)
     VALUES (?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-  `);
-  upsert.run('guusto_workspace_balance_cents', String(balanceCents), now);
-  upsert.run('guusto_workspace_balance_checked_at', now, now);
+  `;
+  await sqlRun(upsertSql, ['guusto_workspace_balance_cents', String(balanceCents), now]);
+  await sqlRun(upsertSql, ['guusto_workspace_balance_checked_at', now, now]);
 
   console.log(`[guusto] Workspace balance: ${balanceCents}¢ (${currency}) — cached at ${now}`);
   return balanceCents;
@@ -168,10 +167,9 @@ export async function getGuustoWorkspaceBalance(currency: string = 'USD'): Promi
 export async function runGuustoBalanceCheck(): Promise<void> {
   try {
     const balanceCents = await getGuustoWorkspaceBalance('USD');
-    const db = getDb();
-    const thresholdRow = db.prepare(
+    const thresholdRow = await sqlGet<{ value: string }>(
       "SELECT value FROM rr_tenant_config WHERE key = 'guusto_low_balance_alert_cents'"
-    ).get() as { value: string } | undefined;
+    );
     const threshold = parseInt(thresholdRow?.value ?? '10000', 10);
 
     if (balanceCents < threshold) {
@@ -258,17 +256,15 @@ export async function placeGuustoOrder(params: PlaceOrderParams): Promise<Guusto
   }
 
   // Persist order row (redemption_url filled in after polling completes)
-  const db = getDb();
   const now = new Date().toISOString();
-  db.prepare(`
+  await sqlRun(`
     INSERT INTO rr_orders (
       id, recognition_id, guusto_request_id, cc_gift_id,
       status, employee_email, amount_cents, currency, created_at
     ) VALUES (?, ?, ?, ?, 'ACCEPTED', ?, ?, ?, ?)
-  `).run(randomUUID(), recognitionId, requestId, ccGiftId, employeeEmail, amountCents, currency, now);
+  `, [randomUUID(), recognitionId, requestId, ccGiftId, employeeEmail, amountCents, currency, now]);
 
-  db.prepare("UPDATE rr_recognitions SET reward_status='reward_sending' WHERE id=?")
-    .run(recognitionId);
+  await sqlRun("UPDATE rr_recognitions SET reward_status='reward_sending' WHERE id=?", [recognitionId]);
 
   console.log(`[guusto] Order placed. requestId=${requestId} cc_gift_id=${ccGiftId}`);
   return { requestId, redemptionUrl: null };
@@ -278,11 +274,11 @@ export async function placeGuustoOrder(params: PlaceOrderParams): Promise<Guusto
  * Returns the stored redemption URL (longToken) for an order, or null if not yet available.
  * Used by the gift-link endpoint so recipients can redeem without checking their email.
  */
-export function getRedemptionUrl(recognitionId: string): string | null {
-  const db = getDb();
-  const row = db.prepare(
-    'SELECT redemption_url FROM rr_orders WHERE recognition_id = ? AND redemption_url IS NOT NULL ORDER BY created_at DESC LIMIT 1'
-  ).get(recognitionId) as { redemption_url: string } | undefined;
+export async function getRedemptionUrl(recognitionId: string): Promise<string | null> {
+  const row = await sqlGet<{ redemption_url: string }>(
+    'SELECT redemption_url FROM rr_orders WHERE recognition_id = ? AND redemption_url IS NOT NULL ORDER BY created_at DESC LIMIT 1',
+    [recognitionId]
+  );
   return row?.redemption_url ?? null;
 }
 
@@ -301,7 +297,6 @@ export async function pollOrderStatus(
   employeeLastName: string,
   managerEmail: string
 ): Promise<void> {
-  const db = getDb();
   let attempts = 0;
 
   while (attempts < MAX_POLL_ATTEMPTS) {
@@ -331,22 +326,22 @@ export async function pollOrderStatus(
     if (!status) continue;
 
     // Update rr_orders with latest status
-    db.prepare('UPDATE rr_orders SET status=?, last_polled_at=? WHERE guusto_request_id=?')
-      .run(status, new Date().toISOString(), requestId);
+    await sqlRun(
+      'UPDATE rr_orders SET status=?, last_polled_at=? WHERE guusto_request_id=?',
+      [status, new Date().toISOString(), requestId]
+    );
 
     if (!TERMINAL_STATUSES.includes(status)) continue; // keep polling
 
     // Terminal state reached
     if (status === 'COMPLETED') {
-      db.prepare("UPDATE rr_recognitions SET reward_status='reward_sent' WHERE id=?")
-        .run(recognitionId);
+      await sqlRun("UPDATE rr_recognitions SET reward_status='reward_sent' WHERE id=?", [recognitionId]);
       console.log(`[guusto] ✓ Order ${requestId} COMPLETED — reward sent to employee`);
 
       // Fetch full order detail to capture the redemption URL (longToken)
       void captureRedemptionUrl(requestId);
     } else {
-      db.prepare("UPDATE rr_recognitions SET reward_status='reward_failed' WHERE id=?")
-        .run(recognitionId);
+      await sqlRun("UPDATE rr_recognitions SET reward_status='reward_failed' WHERE id=?", [recognitionId]);
       console.error(`[guusto] ✗ Order ${requestId} FAILED`);
 
       // Notify manager
@@ -360,10 +355,8 @@ export async function pollOrderStatus(
   }
 
   // Timeout
-  db.prepare("UPDATE rr_orders SET status='poll_timeout' WHERE guusto_request_id=?")
-    .run(requestId);
-  db.prepare("UPDATE rr_recognitions SET reward_status='poll_timeout' WHERE id=?")
-    .run(recognitionId);
+  await sqlRun("UPDATE rr_orders SET status='poll_timeout' WHERE guusto_request_id=?", [requestId]);
+  await sqlRun("UPDATE rr_recognitions SET reward_status='poll_timeout' WHERE id=?", [recognitionId]);
   console.error(`[guusto] Poll timeout after ${MAX_POLL_ATTEMPTS} attempts for ${requestId}`);
 }
 
@@ -389,10 +382,11 @@ async function captureRedemptionUrl(requestId: string): Promise<void> {
       { headers, signal: AbortSignal.timeout(10_000) }
     );
     const text = await res.text();
-    const db = getDb();
 
-    const order = db.prepare('SELECT id, cc_gift_id FROM rr_orders WHERE guusto_request_id=?')
-      .get(requestId) as { id: string; cc_gift_id: string } | undefined;
+    const order = await sqlGet<{ id: string; cc_gift_id: string }>(
+      'SELECT id, cc_gift_id FROM rr_orders WHERE guusto_request_id=?',
+      [requestId]
+    );
     if (!order) return;
 
     type OrderDetail = {
@@ -403,9 +397,10 @@ async function captureRedemptionUrl(requestId: string): Promise<void> {
     const longToken = certificate?.longToken ?? null;
     const echoedBack = text.includes(order.cc_gift_id);
 
-    db.prepare(
-      'UPDATE rr_orders SET redemption_url=?, external_ref_verified=? WHERE guusto_request_id=?'
-    ).run(longToken, echoedBack ? 1 : 0, requestId);
+    await sqlRun(
+      'UPDATE rr_orders SET redemption_url=?, external_ref_verified=? WHERE guusto_request_id=?',
+      [longToken, echoedBack ? 1 : 0, requestId]
+    );
 
     if (longToken) {
       console.log(`[guusto] ✓ Redemption URL captured for order ${requestId}`);
