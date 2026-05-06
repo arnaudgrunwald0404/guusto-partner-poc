@@ -133,3 +133,14 @@ app.get('/api/rr/values', async (_req, res) => {
     res.status(500).json({ error: String(err) });
   }
 });
+
+// Temporary debug endpoint — remove after confirming DB connectivity
+app.get('/api/rr/debug-values', async (_req, res) => {
+  try {
+    const raw = await sqlAll('SELECT id, label FROM rr_company_values LIMIT 3');
+    const count = await sqlAll('SELECT COUNT(*) as n FROM rr_company_values');
+    res.json({ raw, count, supabaseUrl: process.env['SUPABASE_URL']?.slice(0, 30) });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
