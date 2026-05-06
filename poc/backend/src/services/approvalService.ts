@@ -10,7 +10,7 @@
 
 import { randomBytes, createHash } from 'crypto';
 import { randomUUID } from 'crypto';
-import { getDb } from '../db/schema.js';
+import { sqlGet, sqlRun } from '../db/pg.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -42,18 +42,16 @@ function sha256hex(input: string): string {
  * Creates a new approval token row for the given recognition.
  * Returns the raw token (for the email URL) and its hash (stored in DB).
  */
-export function createApprovalToken(recognitionId: string): CreateApprovalTokenResult {
-  const db = getDb();
-
+export async function createApprovalToken(recognitionId: string): Promise<CreateApprovalTokenResult> {
   const token = randomBytes(32).toString('hex');
   const tokenHash = sha256hex(token);
   const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
   const id = randomUUID();
 
-  db.prepare(`
+  await sqlRun(`
     INSERT INTO rr_approvals (id, recognition_id, token_hash, expires_at)
     VALUES (?, ?, ?, ?)
-  `).run(id, recognitionId, tokenHash, expiresAt);
+  `, [id, recognitionId, tokenHash, expiresAt]);
 
   return { token, tokenHash, expiresAt };
 }
@@ -67,15 +65,13 @@ export function createApprovalToken(recognitionId: string): CreateApprovalTokenR
  *   { valid: false, reason: 'expired' }           — past 48h TTL
  *   { valid: false, reason: 'already_decided', already_decided: 'approved'|'dismissed' }
  */
-export function validateToken(token: string): ValidateTokenResult {
-  const db = getDb();
+export async function validateToken(token: string): Promise<ValidateTokenResult> {
   const tokenHash = sha256hex(token);
 
-  const row = db
-    .prepare('SELECT * FROM rr_approvals WHERE token_hash = ?')
-    .get(tokenHash) as
-    | { recognition_id: string; expires_at: string; decided_at: string | null; decision: string | null }
-    | undefined;
+  const row = await sqlGet<{ recognition_id: string; expires_at: string; decided_at: string | null; decision: string | null }>(
+    'SELECT * FROM rr_approvals WHERE token_hash = ?',
+    [tokenHash]
+  );
 
   if (!row) {
     return { valid: false, reason: 'not_found' };
@@ -110,17 +106,16 @@ export type ValidateIdentifyTokenResult =
  * Creates an identify token tied to a classification.
  * Manager uses it to select which employee to recognise.
  */
-export function createIdentifyToken(classificationId: string): CreateIdentifyTokenResult {
-  const db = getDb();
+export async function createIdentifyToken(classificationId: string): Promise<CreateIdentifyTokenResult> {
   const token = randomBytes(32).toString('hex');
   const tokenHash = sha256hex(token);
   const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
   const id = randomUUID();
 
-  db.prepare(`
+  await sqlRun(`
     INSERT INTO rr_identify_tokens (id, classification_id, token_hash, expires_at)
     VALUES (?, ?, ?, ?)
-  `).run(id, classificationId, tokenHash, expiresAt);
+  `, [id, classificationId, tokenHash, expiresAt]);
 
   return { token, tokenHash, expiresAt };
 }
@@ -128,15 +123,13 @@ export function createIdentifyToken(classificationId: string): CreateIdentifyTok
 /**
  * Validates and looks up an identify token. Returns classification_id on success.
  */
-export function validateIdentifyToken(token: string): { valid: true; classification_id: string } | { valid: false; reason: 'not_found' | 'expired' | 'already_used' } {
-  const db = getDb();
+export async function validateIdentifyToken(token: string): Promise<{ valid: true; classification_id: string } | { valid: false; reason: 'not_found' | 'expired' | 'already_used' }> {
   const tokenHash = sha256hex(token);
 
-  const row = db
-    .prepare('SELECT * FROM rr_identify_tokens WHERE token_hash = ?')
-    .get(tokenHash) as
-    | { classification_id: string; expires_at: string; used_at: string | null }
-    | undefined;
+  const row = await sqlGet<{ classification_id: string; expires_at: string; used_at: string | null }>(
+    'SELECT * FROM rr_identify_tokens WHERE token_hash = ?',
+    [tokenHash]
+  );
 
   if (!row) return { valid: false, reason: 'not_found' };
   if (row.used_at) return { valid: false, reason: 'already_used' };
@@ -148,28 +141,28 @@ export function validateIdentifyToken(token: string): { valid: true; classificat
 /**
  * Marks an identify token as used (one-shot).
  */
-export function consumeIdentifyToken(token: string): void {
-  const db = getDb();
+export async function consumeIdentifyToken(token: string): Promise<void> {
   const tokenHash = sha256hex(token);
-  db.prepare('UPDATE rr_identify_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL')
-    .run(new Date().toISOString(), tokenHash);
+  await sqlRun(
+    'UPDATE rr_identify_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL',
+    [new Date().toISOString(), tokenHash]
+  );
 }
 
 /**
  * Records a manager's decision on an approval token.
  * Idempotent — silently no-ops if decision already recorded (first write wins).
  */
-export function recordDecision(
+export async function recordDecision(
   tokenHash: string,
   decision: 'approved' | 'dismissed'
-): void {
-  const db = getDb();
+): Promise<void> {
   const now = new Date().toISOString();
 
   // Only update if not yet decided (first write wins)
-  db.prepare(`
+  await sqlRun(`
     UPDATE rr_approvals
     SET decided_at = ?, decision = ?
     WHERE token_hash = ? AND decided_at IS NULL
-  `).run(now, decision, tokenHash);
+  `, [now, decision, tokenHash]);
 }

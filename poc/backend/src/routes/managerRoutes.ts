@@ -10,7 +10,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { getDb } from '../db/schema.js';
+import { sqlAll, sqlGet } from '../db/pg.js';
 import { getBalance, getLedger } from '../services/budgetService.js';
 
 interface EmployeeRow {
@@ -32,15 +32,15 @@ export const managerRouter = Router();
 // GET /api/rr/manager/budget
 // ---------------------------------------------------------------------------
 
-managerRouter.get('/budget', (req: Request, res: Response): void => {
+managerRouter.get('/budget', async (req: Request, res: Response): Promise<void> => {
   const managerId = req.headers['x-user-id'] as string | undefined;
   if (!managerId) {
     res.status(401).json({ error: 'Missing x-user-id header' });
     return;
   }
 
-  const balance = getBalance(managerId);
-  const rawLedger = getLedger(managerId);
+  const balance = await getBalance(managerId);
+  const rawLedger = await getLedger(managerId);
 
   res.json({
     managerId,
@@ -64,18 +64,26 @@ managerRouter.get('/budget', (req: Request, res: Response): void => {
 //   so each manager only sees their own queue.
 // ---------------------------------------------------------------------------
 
-managerRouter.get('/suggestions', (req: Request, res: Response): void => {
+managerRouter.get('/suggestions', async (req: Request, res: Response): Promise<void> => {
   const managerId = req.headers['x-user-id'] as string | undefined;
   if (!managerId) {
     res.status(401).json({ error: 'Missing x-user-id header' });
     return;
   }
 
-  const db = getDb();
-
   // Pull all pending approvals (not yet decided, not expired) with their
   // linked recognition + classification data.
-  const rows = db.prepare(`
+  const rows = await sqlAll<{
+    approval_id: string;
+    recognition_id: string;
+    expires_at: string;
+    employee_first_name: string;
+    employee_id: string | null;
+    evidence_quote: string | null;
+    recognition_message: string | null;
+    reward_amount_cents: number;
+    confidence: number | null;
+  }>(`
     SELECT
       a.id         AS approval_id,
       a.recognition_id,
@@ -89,24 +97,16 @@ managerRouter.get('/suggestions', (req: Request, res: Response): void => {
     FROM rr_approvals a
     JOIN rr_recognitions r ON r.id = a.recognition_id
     LEFT JOIN rr_classifications c ON c.id = r.classification_id
-    WHERE a.decision IS NULL AND a.expires_at > datetime('now')
-    ORDER BY a.rowid DESC
-  `).all() as Array<{
-    approval_id: string;
-    recognition_id: string;
-    expires_at: string;
-    employee_first_name: string;
-    employee_id: string | null;
-    evidence_quote: string | null;
-    recognition_message: string | null;
-    reward_amount_cents: number;
-    confidence: number | null;
-  }>;
+    WHERE a.decision IS NULL AND a.expires_at > NOW()
+    ORDER BY a.created_at DESC
+  `);
 
   // Filter to this manager's direct reports (by employee_id lookup in DB)
-  const directReportIds = new Set(
-    (db.prepare('SELECT id FROM rr_employees WHERE manager_email = ?').all(managerId) as {id: string}[]).map(r => r.id)
+  const directReportRows = await sqlAll<{ id: string }>(
+    'SELECT id FROM rr_employees WHERE manager_email = ?',
+    [managerId]
   );
+  const directReportIds = new Set(directReportRows.map(r => r.id));
 
   // If manager has no matching direct reports in the stub, return all suggestions
   // (useful for the hackathon demo where managerId may not match stub exactly)
@@ -130,82 +130,86 @@ managerRouter.get('/suggestions', (req: Request, res: Response): void => {
 // GET /api/rr/manager/team — team participation + recognition gap alerts
 // ---------------------------------------------------------------------------
 
-managerRouter.get('/team', (req: Request, res: Response): void => {
+managerRouter.get('/team', async (req: Request, res: Response): Promise<void> => {
   const managerId = req.headers['x-user-id'] as string | undefined;
   if (!managerId) {
     res.status(401).json({ error: 'Missing x-user-id header' });
     return;
   }
 
-  const db = getDb();
   const daysParam = req.query['days'] as string | undefined;
   const daysNum = Math.min(365, Math.max(1, parseInt(daysParam ?? '30', 10)));
   const since = new Date(Date.now() - daysNum * 24 * 60 * 60 * 1000).toISOString();
 
   // Load gap alert threshold from config
-  const gapDays = parseInt(
-    (db.prepare(
-      "SELECT value FROM rr_tenant_config WHERE key = 'recognition_gap_alert_days'"
-    ).get() as { value: string } | undefined)?.value ?? '30',
-    10,
+  const gapRow = await sqlGet<{ value: string }>(
+    "SELECT value FROM rr_tenant_config WHERE key = 'recognition_gap_alert_days'"
   );
+  const gapDays = parseInt(gapRow?.value ?? '30', 10);
 
   // Direct reports from DB
-  const directReports = db.prepare('SELECT * FROM rr_employees WHERE manager_email = ?').all(managerId) as EmployeeRow[];
+  const directReports = await sqlAll<EmployeeRow>(
+    'SELECT * FROM rr_employees WHERE manager_email = ?',
+    [managerId]
+  );
 
-  const teamData = directReports.map(emp => {
-    const received = (db.prepare(
-      'SELECT COUNT(*) AS n FROM rr_shoutouts WHERE recipient_id = ? AND created_at >= ?'
-    ).get(emp.id, since) as { n: number }).n;
+  const teamData = await Promise.all(directReports.map(async emp => {
+    const receivedRow = await sqlGet<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM rr_shoutouts WHERE recipient_id = ? AND created_at >= ?',
+      [emp.id, since]
+    );
 
-    const sent = (db.prepare(
-      'SELECT COUNT(*) AS n FROM rr_shoutouts WHERE sender_id = ? AND created_at >= ?'
-    ).get(emp.id, since) as { n: number }).n;
+    const sentRow = await sqlGet<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM rr_shoutouts WHERE sender_id = ? AND created_at >= ?',
+      [emp.id, since]
+    );
 
-    const lastRec = db.prepare(
-      'SELECT created_at FROM rr_shoutouts WHERE recipient_id = ? ORDER BY created_at DESC LIMIT 1'
-    ).get(emp.id) as { created_at: string } | undefined;
+    const lastRec = await sqlGet<{ created_at: string }>(
+      'SELECT created_at FROM rr_shoutouts WHERE recipient_id = ? ORDER BY created_at DESC LIMIT 1',
+      [emp.id]
+    );
 
     const daysSince = lastRec
       ? Math.floor((Date.now() - new Date(lastRec.created_at).getTime()) / 86_400_000)
       : null;
 
     // Top values this person has received
-    const topValues = db.prepare(`
+    const topValues = await sqlAll<{ label: string; count: number }>(`
       SELECT sv.value_label AS label, COUNT(*) AS count
       FROM rr_shoutout_values sv
       JOIN rr_shoutouts s ON s.id = sv.shoutout_id
       WHERE s.recipient_id = ? AND s.created_at >= ?
       GROUP BY sv.value_label ORDER BY count DESC LIMIT 3
-    `).all(emp.id, since) as Array<{ label: string; count: number }>;
+    `, [emp.id, since]);
 
     return {
       employeeId: emp.id,
       name: `${emp.first_name} ${emp.last_name}`,
       email: emp.email,
-      recognitionsReceived: received,
-      recognitionsSent: sent,
+      recognitionsReceived: receivedRow?.n ?? 0,
+      recognitionsSent: sentRow?.n ?? 0,
       lastRecognizedAt: lastRec?.created_at ?? null,
       daysSinceLastRecognized: daysSince,
       flagged: daysSince === null || daysSince > gapDays,
       topValues,
     };
-  });
+  }));
 
   // Manager's own outbound activity this period
-  const mySentCount = (db.prepare(
-    'SELECT COUNT(*) AS n FROM rr_shoutouts WHERE sender_id = ? AND created_at >= ?'
-  ).get(managerId, since) as { n: number }).n;
+  const mySentRow = await sqlGet<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM rr_shoutouts WHERE sender_id = ? AND created_at >= ?',
+    [managerId, since]
+  );
 
-  const myGiftStats = db.prepare(`
+  const myGiftStats = await sqlGet<{ n: number; total: number }>(`
     SELECT
       COUNT(*) AS n,
       COALESCE(SUM(gift_amount_cents), 0) AS total
     FROM rr_shoutouts
     WHERE sender_id = ? AND gift_amount_cents IS NOT NULL AND created_at >= ?
-  `).get(managerId, since) as { n: number; total: number };
+  `, [managerId, since]);
 
-  const balance = getBalance(managerId);
+  const balance = await getBalance(managerId);
   const flaggedCount = teamData.filter(t => t.flagged).length;
 
   res.json({
@@ -214,12 +218,12 @@ managerRouter.get('/team', (req: Request, res: Response): void => {
     budget: {
       balanceCents: balance,
       balanceDollars: (balance / 100).toFixed(2),
-      giftsIssuedCents: myGiftStats.total,
-      giftsIssuedDollars: (myGiftStats.total / 100).toFixed(2),
+      giftsIssuedCents: myGiftStats?.total ?? 0,
+      giftsIssuedDollars: ((myGiftStats?.total ?? 0) / 100).toFixed(2),
     },
     activity: {
-      recognitionsSent: mySentCount,
-      giftsIssued: myGiftStats.n,
+      recognitionsSent: mySentRow?.n ?? 0,
+      giftsIssued: myGiftStats?.n ?? 0,
     },
     directReports: teamData,
     summary: {

@@ -19,7 +19,7 @@
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'crypto';
-import { getDb } from '../db/schema.js';
+import { sqlAll, sqlGet, sqlRun } from '../db/pg.js';
 import { STUB_EMPLOYEES } from '../services/employeeResolver.js';
 import {
   allocateBudget,
@@ -48,17 +48,16 @@ adminRouter.use((req: Request, res: Response, next: NextFunction): void => {
 // Company Values
 // ---------------------------------------------------------------------------
 
-adminRouter.get('/values', (_req: Request, res: Response): void => {
-  const db = getDb();
-  const values = db.prepare(`
+adminRouter.get('/values', async (_req: Request, res: Response): Promise<void> => {
+  const values = await sqlAll(`
     SELECT id, label, emoji, sort_order, is_active, created_at
     FROM rr_company_values
     ORDER BY sort_order ASC, created_at ASC
-  `).all();
+  `);
   res.json({ values });
 });
 
-adminRouter.post('/values', (req: Request, res: Response): void => {
+adminRouter.post('/values', async (req: Request, res: Response): Promise<void> => {
   const { label, emoji } = req.body as { label?: string; emoji?: string };
 
   if (!label || typeof label !== 'string' || label.trim().length === 0) {
@@ -66,10 +65,10 @@ adminRouter.post('/values', (req: Request, res: Response): void => {
     return;
   }
 
-  const db = getDb();
-  const activeCount = (db.prepare(
+  const activeCountRow = await sqlGet<{ n: number }>(
     "SELECT COUNT(*) as n FROM rr_company_values WHERE is_active = 1"
-  ).get() as { n: number }).n;
+  );
+  const activeCount = activeCountRow?.n ?? 0;
 
   if (activeCount >= 8) {
     res.status(409).json({
@@ -80,39 +79,41 @@ adminRouter.post('/values', (req: Request, res: Response): void => {
   }
 
   // Prevent duplicate labels (case-insensitive)
-  const exists = db.prepare(
-    "SELECT id FROM rr_company_values WHERE LOWER(label) = LOWER(?) AND is_active = 1"
-  ).get(label.trim());
+  const exists = await sqlGet(
+    "SELECT id FROM rr_company_values WHERE LOWER(label) = LOWER(?) AND is_active = 1",
+    [label.trim()]
+  );
   if (exists) {
     res.status(409).json({ error: 'A value with this label already exists' });
     return;
   }
 
-  const maxOrder = (db.prepare(
+  const maxOrderRow = await sqlGet<{ m: number }>(
     'SELECT COALESCE(MAX(sort_order), 0) as m FROM rr_company_values'
-  ).get() as { m: number }).m;
+  );
+  const maxOrder = maxOrderRow?.m ?? 0;
 
   const id = randomUUID();
   const now = new Date().toISOString();
-  db.prepare(`
+  await sqlRun(`
     INSERT INTO rr_company_values (id, tenant_id, label, emoji, sort_order, is_active, created_at)
     VALUES (?, 'default', ?, ?, ?, 1, ?)
-  `).run(id, label.trim(), emoji ?? '⭐', maxOrder + 1, now);
+  `, [id, label.trim(), emoji ?? '⭐', maxOrder + 1, now]);
 
   res.status(201).json({ id, label: label.trim(), emoji: emoji ?? '⭐', isActive: true });
 });
 
-adminRouter.patch('/values/:id', (req: Request, res: Response): void => {
+adminRouter.patch('/values/:id', async (req: Request, res: Response): Promise<void> => {
   const { label, emoji, is_active } = req.body as {
     label?: string;
     emoji?: string;
     is_active?: boolean;
   };
-  const db = getDb();
 
-  const existing = db.prepare(
-    'SELECT id FROM rr_company_values WHERE id = ?'
-  ).get(req.params.id);
+  const existing = await sqlGet(
+    'SELECT id FROM rr_company_values WHERE id = ?',
+    [req.params.id]
+  );
   if (!existing) {
     res.status(404).json({ error: 'Value not found' });
     return;
@@ -120,9 +121,10 @@ adminRouter.patch('/values/:id', (req: Request, res: Response): void => {
 
   // Guard: cannot have fewer than 1 active value
   if (is_active === false) {
-    const activeCount = (db.prepare(
+    const activeCountRow = await sqlGet<{ n: number }>(
       "SELECT COUNT(*) as n FROM rr_company_values WHERE is_active = 1"
-    ).get() as { n: number }).n;
+    );
+    const activeCount = activeCountRow?.n ?? 0;
     if (activeCount <= 1) {
       res.status(409).json({ error: 'At least one active value must remain' });
       return;
@@ -141,7 +143,7 @@ adminRouter.patch('/values/:id', (req: Request, res: Response): void => {
   }
 
   vals.push(req.params.id);
-  db.prepare(`UPDATE rr_company_values SET ${setClauses.join(', ')} WHERE id = ?`).run(...vals);
+  await sqlRun(`UPDATE rr_company_values SET ${setClauses.join(', ')} WHERE id = ?`, vals);
   res.json({ updated: true, id: req.params.id });
 });
 
@@ -150,7 +152,7 @@ adminRouter.patch('/values/:id', (req: Request, res: Response): void => {
 // ---------------------------------------------------------------------------
 
 adminRouter.get('/budget', async (_req: Request, res: Response): Promise<void> => {
-  const balances = getAllManagerBalances();
+  const balances = await getAllManagerBalances();
 
   const managers = balances.map(b => {
     // Look up manager name — find a direct report and use their manager info
@@ -179,7 +181,6 @@ adminRouter.get('/budget', async (_req: Request, res: Response): Promise<void> =
   };
 
   // Guusto workspace balance — try live fetch first, fall back to cached value
-  const db = getDb();
   let workspaceBalanceCents: number | null = null;
   let workspaceCheckedAt: string | null = null;
   let workspaceLive = false;
@@ -190,19 +191,19 @@ adminRouter.get('/budget', async (_req: Request, res: Response): Promise<void> =
     workspaceCheckedAt = new Date().toISOString();
   } catch {
     // Use cached value from last scheduled check
-    const cachedBalance = db.prepare(
+    const cachedBalance = await sqlGet<{ value: string }>(
       "SELECT value FROM rr_tenant_config WHERE key = 'guusto_workspace_balance_cents'"
-    ).get() as { value: string } | undefined;
-    const cachedAt = db.prepare(
+    );
+    const cachedAt = await sqlGet<{ value: string }>(
       "SELECT value FROM rr_tenant_config WHERE key = 'guusto_workspace_balance_checked_at'"
-    ).get() as { value: string } | undefined;
+    );
     workspaceBalanceCents = cachedBalance ? parseInt(cachedBalance.value, 10) : null;
     workspaceCheckedAt = cachedAt?.value ?? null;
   }
 
-  const thresholdRow = db.prepare(
+  const thresholdRow = await sqlGet<{ value: string }>(
     "SELECT value FROM rr_tenant_config WHERE key = 'guusto_low_balance_alert_cents'"
-  ).get() as { value: string } | undefined;
+  );
   const alertThresholdCents = parseInt(thresholdRow?.value ?? '10000', 10);
   const isLow = workspaceBalanceCents !== null && workspaceBalanceCents < alertThresholdCents;
 
@@ -230,7 +231,7 @@ adminRouter.get('/budget', async (_req: Request, res: Response): Promise<void> =
   });
 });
 
-adminRouter.post('/budget/allocate', (req: Request, res: Response): void => {
+adminRouter.post('/budget/allocate', async (req: Request, res: Response): Promise<void> => {
   const adminId = (req.headers['x-user-id'] as string) || 'admin';
   const { managerId, amountCents, periodLabel } = req.body as {
     managerId?: string;
@@ -248,9 +249,9 @@ adminRouter.post('/budget/allocate', (req: Request, res: Response): void => {
   }
 
   const label = periodLabel ?? `Manual allocation ${new Date().toISOString().slice(0, 10)}`;
-  allocateBudget({ managerId, amountCents, periodLabel: label, adminId });
+  await allocateBudget({ managerId, amountCents, periodLabel: label, adminId });
 
-  writeAuditLog({
+  await writeAuditLog({
     actorId: adminId,
     actorRole: 'hr_admin',
     action: 'budget_allocated',
@@ -259,7 +260,7 @@ adminRouter.post('/budget/allocate', (req: Request, res: Response): void => {
     details: { amountCents, periodLabel: label },
   });
 
-  const newBalance = getBalance(managerId);
+  const newBalance = await getBalance(managerId);
   res.status(201).json({
     managerId,
     periodLabel: label,
@@ -273,14 +274,17 @@ adminRouter.post('/budget/allocate', (req: Request, res: Response): void => {
 // Analytics Reports (P0-9)
 // ---------------------------------------------------------------------------
 
-adminRouter.get('/reports/summary', (req: Request, res: Response): void => {
-  const db = getDb();
+adminRouter.get('/reports/summary', async (req: Request, res: Response): Promise<void> => {
   const daysParam = req.query['days'] as string | undefined;
   const daysNum = Math.min(365, Math.max(1, parseInt(daysParam ?? '30', 10)));
   const since = new Date(Date.now() - daysNum * 24 * 60 * 60 * 1000).toISOString();
 
   // Shoutout-level metrics
-  const shoutoutStats = db.prepare(`
+  const shoutoutStats = await sqlGet<{
+    total_sent: number; unique_senders: number; unique_recipients: number;
+    with_gift: number; total_gifted_cents: number;
+    gifts_delivered: number; gifts_redeemed: number;
+  }>(`
     SELECT
       COUNT(*)                                                          AS total_sent,
       COUNT(DISTINCT sender_id)                                         AS unique_senders,
@@ -291,69 +295,66 @@ adminRouter.get('/reports/summary', (req: Request, res: Response): void => {
       COUNT(CASE WHEN gift_status IN ('sent','redeemed') THEN 1 END)    AS gifts_delivered,
       COUNT(CASE WHEN gift_status = 'redeemed' THEN 1 END)              AS gifts_redeemed
     FROM rr_shoutouts WHERE created_at >= ?
-  `).get(since) as {
-    total_sent: number; unique_senders: number; unique_recipients: number;
-    with_gift: number; total_gifted_cents: number;
-    gifts_delivered: number; gifts_redeemed: number;
-  };
+  `, [since]);
 
   // Values distribution (ranked)
-  const valuesDistribution = db.prepare(`
+  const valuesDistribution = await sqlAll<{ label: string; count: number }>(`
     SELECT sv.value_label AS label, COUNT(*) AS count
     FROM rr_shoutout_values sv
     JOIN rr_shoutouts s ON s.id = sv.shoutout_id
     WHERE s.created_at >= ?
     GROUP BY sv.value_label
     ORDER BY count DESC
-  `).all(since) as Array<{ label: string; count: number }>;
+  `, [since]);
 
   // Gong-pipeline recognitions (legacy)
-  const gongStats = db.prepare(`
+  const gongStats = await sqlGet<{ total: number; rewards_sent: number }>(`
     SELECT
       COUNT(*) AS total,
       COUNT(CASE WHEN reward_status = 'reward_sent' THEN 1 END) AS rewards_sent
     FROM rr_recognitions WHERE created_at >= ?
-  `).get(since) as { total: number; rewards_sent: number };
+  `, [since]);
 
   // Coverage: % of employees who received ≥1 recognition
   const totalEmployees = STUB_EMPLOYEES.length;
-  const coveredIds = (db.prepare(
-    'SELECT DISTINCT recipient_id FROM rr_shoutouts WHERE created_at >= ?'
-  ).all(since) as Array<{ recipient_id: string }>).map(r => r.recipient_id);
+  const coveredIds = (await sqlAll<{ recipient_id: string }>(
+    'SELECT DISTINCT recipient_id FROM rr_shoutouts WHERE created_at >= ?',
+    [since]
+  )).map(r => r.recipient_id);
   const coveragePct =
     totalEmployees > 0 ? ((coveredIds.length / totalEmployees) * 100).toFixed(1) : '0.0';
 
   // Manager activation rate (managers with budget who sent ≥1 gift)
-  const managersWithBudget = getAllManagerBalances();
-  const activeGiftManagers = (db.prepare(`
+  const managersWithBudget = await getAllManagerBalances();
+  const activeGiftManagersRow = await sqlGet<{ n: number }>(`
     SELECT COUNT(DISTINCT sender_id) AS n
     FROM rr_shoutouts
     WHERE gift_amount_cents IS NOT NULL AND created_at >= ?
-  `).get(since) as { n: number }).n;
+  `, [since]);
+  const activeGiftManagers = activeGiftManagersRow?.n ?? 0;
 
   // Recognition gap: employees not recognized in the last N days
-  const gapDays = parseInt(
-    (db.prepare(
-      "SELECT value FROM rr_tenant_config WHERE key = 'recognition_gap_alert_days'"
-    ).get() as { value: string } | undefined)?.value ?? '30',
-    10,
+  const gapRow = await sqlGet<{ value: string }>(
+    "SELECT value FROM rr_tenant_config WHERE key = 'recognition_gap_alert_days'"
   );
+  const gapDays = parseInt(gapRow?.value ?? '30', 10);
   const gapSince = new Date(Date.now() - gapDays * 24 * 60 * 60 * 1000).toISOString();
   const recentlyRecognized = new Set(
-    (db.prepare(
-      'SELECT DISTINCT recipient_id FROM rr_shoutouts WHERE created_at >= ?'
-    ).all(gapSince) as Array<{ recipient_id: string }>).map(r => r.recipient_id)
+    (await sqlAll<{ recipient_id: string }>(
+      'SELECT DISTINCT recipient_id FROM rr_shoutouts WHERE created_at >= ?',
+      [gapSince]
+    )).map(r => r.recipient_id)
   );
   const unrecognizedEmployees = STUB_EMPLOYEES.filter(e => !recentlyRecognized.has(e.id));
 
   // Managers inactive for 60+ days (have budget but sent nothing)
   const managerActivity60 = new Set(
-    (db.prepare(`
+    (await sqlAll<{ sender_id: string }>(`
       SELECT DISTINCT sender_id
       FROM rr_shoutouts
       WHERE gift_amount_cents IS NOT NULL
-        AND created_at >= datetime('now', '-60 days')
-    `).all() as Array<{ sender_id: string }>).map(r => r.sender_id)
+        AND created_at >= NOW() - INTERVAL '60 days'
+    `)).map(r => r.sender_id)
   );
   const inactiveManagers = managersWithBudget
     .filter(m => m.balance > 0 && !managerActivity60.has(m.manager_id))
@@ -362,21 +363,21 @@ adminRouter.get('/reports/summary', (req: Request, res: Response): void => {
   res.json({
     period: { days: daysNum, since },
     shoutouts: {
-      totalSent: shoutoutStats.total_sent,
-      uniqueSenders: shoutoutStats.unique_senders,
-      uniqueRecipients: shoutoutStats.unique_recipients,
-      withGift: shoutoutStats.with_gift,
-      totalGiftedCents: shoutoutStats.total_gifted_cents,
-      totalGiftedDollars: (shoutoutStats.total_gifted_cents / 100).toFixed(2),
-      giftsDelivered: shoutoutStats.gifts_delivered,
-      giftsRedeemed: shoutoutStats.gifts_redeemed,
-      redemptionRate: shoutoutStats.gifts_delivered > 0
-        ? ((shoutoutStats.gifts_redeemed / shoutoutStats.gifts_delivered) * 100).toFixed(1) + '%'
+      totalSent: shoutoutStats?.total_sent ?? 0,
+      uniqueSenders: shoutoutStats?.unique_senders ?? 0,
+      uniqueRecipients: shoutoutStats?.unique_recipients ?? 0,
+      withGift: shoutoutStats?.with_gift ?? 0,
+      totalGiftedCents: shoutoutStats?.total_gifted_cents ?? 0,
+      totalGiftedDollars: ((shoutoutStats?.total_gifted_cents ?? 0) / 100).toFixed(2),
+      giftsDelivered: shoutoutStats?.gifts_delivered ?? 0,
+      giftsRedeemed: shoutoutStats?.gifts_redeemed ?? 0,
+      redemptionRate: (shoutoutStats?.gifts_delivered ?? 0) > 0
+        ? (((shoutoutStats?.gifts_redeemed ?? 0) / (shoutoutStats?.gifts_delivered ?? 1)) * 100).toFixed(1) + '%'
         : 'N/A',
     },
     gongRecognitions: {
-      total: gongStats.total,
-      rewardsSent: gongStats.rewards_sent,
+      total: gongStats?.total ?? 0,
+      rewardsSent: gongStats?.rewards_sent ?? 0,
     },
     coverage: {
       totalEmployees,
@@ -403,14 +404,13 @@ adminRouter.get('/reports/summary', (req: Request, res: Response): void => {
   });
 });
 
-adminRouter.get('/reports/export', (req: Request, res: Response): void => {
-  const db = getDb();
+adminRouter.get('/reports/export', async (req: Request, res: Response): Promise<void> => {
   const { since, until } = req.query as { since?: string; until?: string };
 
   const fromDate = since ?? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
   const toDate = until ?? new Date().toISOString();
 
-  const rows = db.prepare(`
+  const rows = await sqlAll<Record<string, unknown>>(`
     SELECT
       s.id,
       s.sender_name,
@@ -423,13 +423,14 @@ adminRouter.get('/reports/export', (req: Request, res: Response): void => {
       s.gift_amount_cents,
       s.gift_status,
       s.created_at,
-      GROUP_CONCAT(sv.value_label, '; ') AS values
+      STRING_AGG(sv.value_label, '; ') AS values
     FROM rr_shoutouts s
     LEFT JOIN rr_shoutout_values sv ON sv.shoutout_id = s.id
     WHERE s.created_at BETWEEN ? AND ?
-    GROUP BY s.id
+    GROUP BY s.id, s.sender_name, s.sender_id, s.recipient_name, s.recipient_email,
+             s.message, s.visibility, s.source, s.gift_amount_cents, s.gift_status, s.created_at
     ORDER BY s.created_at DESC
-  `).all(fromDate, toDate) as any[];
+  `, [fromDate, toDate]);
 
   const escape = (v: string | null | undefined): string =>
     `"${(v ?? '').replace(/"/g, '""')}"`;
@@ -437,18 +438,18 @@ adminRouter.get('/reports/export', (req: Request, res: Response): void => {
   const header = 'id,sender_name,sender_id,recipient_name,recipient_email,values,message,gift_amount_usd,gift_status,visibility,source,date';
   const lines = rows.map(r =>
     [
-      r.id,
-      escape(r.sender_name),
-      r.sender_id,
-      escape(r.recipient_name),
-      r.recipient_email,
-      escape(r.values),
-      escape(r.message),
-      r.gift_amount_cents != null ? (r.gift_amount_cents / 100).toFixed(2) : '',
-      r.gift_status ?? '',
-      r.visibility,
-      r.source,
-      r.created_at,
+      r['id'],
+      escape(r['sender_name'] as string | null),
+      r['sender_id'],
+      escape(r['recipient_name'] as string | null),
+      r['recipient_email'],
+      escape(r['values'] as string | null),
+      escape(r['message'] as string | null),
+      r['gift_amount_cents'] != null ? ((r['gift_amount_cents'] as number) / 100).toFixed(2) : '',
+      r['gift_status'] ?? '',
+      r['visibility'],
+      r['source'],
+      r['created_at'],
     ].join(',')
   );
 
@@ -475,11 +476,10 @@ const EDITABLE_KEYS = new Set([
   'peer_gifting_enabled',
 ]);
 
-adminRouter.get('/config', (_req: Request, res: Response): void => {
-  const db = getDb();
-  const rows = db.prepare(
+adminRouter.get('/config', async (_req: Request, res: Response): Promise<void> => {
+  const rows = await sqlAll<{ key: string; value: string; updated_by: string | null; updated_at: string }>(
     'SELECT key, value, updated_by, updated_at FROM rr_tenant_config ORDER BY key'
-  ).all() as Array<{ key: string; value: string; updated_by: string | null; updated_at: string }>;
+  );
 
   res.json({
     config: Object.fromEntries(rows.map(r => [r.key, r.value])),
@@ -488,7 +488,7 @@ adminRouter.get('/config', (_req: Request, res: Response): void => {
   });
 });
 
-adminRouter.put('/config', (req: Request, res: Response): void => {
+adminRouter.put('/config', async (req: Request, res: Response): Promise<void> => {
   const adminId = (req.headers['x-user-id'] as string) || 'admin';
   const updates = req.body as Record<string, unknown>;
 
@@ -497,16 +497,7 @@ adminRouter.put('/config', (req: Request, res: Response): void => {
     return;
   }
 
-  const db = getDb();
   const now = new Date().toISOString();
-  const upsert = db.prepare(`
-    INSERT INTO rr_tenant_config (key, value, updated_by, updated_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET
-      value      = excluded.value,
-      updated_by = excluded.updated_by,
-      updated_at = excluded.updated_at
-  `);
 
   const updated: string[] = [];
   const skipped: string[] = [];
@@ -516,7 +507,14 @@ adminRouter.put('/config', (req: Request, res: Response): void => {
       skipped.push(key);
       continue;
     }
-    upsert.run(key, String(value), adminId, now);
+    await sqlRun(`
+      INSERT INTO rr_tenant_config (key, value, updated_by, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        value      = excluded.value,
+        updated_by = excluded.updated_by,
+        updated_at = excluded.updated_at
+    `, [key, String(value), adminId, now]);
     updated.push(key);
   }
 
@@ -528,9 +526,8 @@ adminRouter.put('/config', (req: Request, res: Response): void => {
 // GET /api/rr/admin/analytics/values?from=<ISO>&to=<ISO>&scope=tenant|team
 // ---------------------------------------------------------------------------
 
-adminRouter.get('/analytics/values', (req: Request, res: Response): void => {
+adminRouter.get('/analytics/values', async (req: Request, res: Response): Promise<void> => {
   const { from, to } = req.query as Record<string, string>;
-  const db = getDb();
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -541,14 +538,14 @@ adminRouter.get('/analytics/values', (req: Request, res: Response): void => {
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  const rows = db.prepare(`
+  const rows = await sqlAll<{ label: string; count: number }>(`
     SELECT sv.value_label AS label, COUNT(*) AS count
     FROM rr_shoutout_values sv
     JOIN rr_shoutouts s ON s.id = sv.shoutout_id
     ${where}
     GROUP BY sv.value_label
     ORDER BY count DESC
-  `).all(...params) as Array<{ label: string; count: number }>;
+  `, params);
 
   const total = rows.reduce((sum, r) => sum + r.count, 0);
 
@@ -568,8 +565,7 @@ adminRouter.get('/analytics/values', (req: Request, res: Response): void => {
 // Audit Log (read-only — writes happen via writeAuditLog())
 // ---------------------------------------------------------------------------
 
-adminRouter.get('/audit', (req: Request, res: Response): void => {
-  const db = getDb();
+adminRouter.get('/audit', async (req: Request, res: Response): Promise<void> => {
   const { entityId, action, page, limit } = req.query as Record<string, string>;
 
   const conditions: string[] = [];
@@ -582,17 +578,19 @@ adminRouter.get('/audit', (req: Request, res: Response): void => {
   const limitNum = Math.min(100, parseInt(limit ?? '50', 10));
   const offset = (pageNum - 1) * limitNum;
 
-  const rows = db.prepare(
-    `SELECT * FROM rr_audit_log ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
-  ).all(...params, limitNum, offset) as any[];
+  const rows = await sqlAll<Record<string, unknown>>(
+    `SELECT * FROM rr_audit_log ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+    [...params, limitNum, offset]
+  );
 
-  const total = (db.prepare(
-    `SELECT COUNT(*) as n FROM rr_audit_log ${where}`
-  ).get(...params) as { n: number }).n;
+  const totalRow = await sqlGet<{ n: number }>(
+    `SELECT COUNT(*) as n FROM rr_audit_log ${where}`,
+    params
+  );
 
   res.json({
-    items: rows.map(r => ({ ...r, details: JSON.parse(r.details) })),
-    total,
+    items: rows.map(r => ({ ...r, details: JSON.parse(r['details'] as string) })),
+    total: totalRow?.n ?? 0,
     page: pageNum,
     limit: limitNum,
   });

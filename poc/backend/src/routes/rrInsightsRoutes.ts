@@ -13,7 +13,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { getDb } from '../db/schema.js';
+import { sqlAll, sqlGet } from '../db/pg.js';
 import { getShoutoutFeed } from '../services/shoutoutService.js';
 
 interface EmployeeRow {
@@ -56,15 +56,16 @@ function avatarColorForId(employeeId: string): string {
 //   limit      — defaults to 5, max 20
 // ---------------------------------------------------------------------------
 
-rrInsightsRouter.get('/nudges/people-to-recognize', (req: Request, res: Response): void => {
+rrInsightsRouter.get('/nudges/people-to-recognize', async (req: Request, res: Response): Promise<void> => {
   try {
     const managerId = (req.query['managerId'] as string | undefined) ?? 'adefazio@clearcompany.com';
     const limit = Math.min(20, Math.max(1, parseInt((req.query['limit'] as string) ?? '5', 10)));
 
-    const db = getDb();
-
     // Resolve direct reports for the given manager
-    const directReports = db.prepare('SELECT * FROM rr_employees WHERE manager_email = ?').all(managerId) as EmployeeRow[];
+    const directReports = await sqlAll<EmployeeRow>(
+      'SELECT * FROM rr_employees WHERE manager_email = ?',
+      [managerId]
+    );
 
     if (directReports.length === 0) {
       res.json({ nudges: [] });
@@ -74,16 +75,16 @@ rrInsightsRouter.get('/nudges/people-to-recognize', (req: Request, res: Response
     // For each direct report, find the most recent shoutout where they were
     // the recipient (company or team visibility only — private doesn't count
     // as a meaningful public recognition for nudge purposes).
-    const nudges = directReports.map(emp => {
-      const lastRow = db.prepare(`
+    const nudges = await Promise.all(directReports.map(async emp => {
+      const lastRow = await sqlGet<{ last_at: string | null }>(`
         SELECT MAX(created_at) AS last_at
         FROM rr_shoutouts
         WHERE recipient_id = ?
           AND visibility IN ('company', 'team')
           AND deleted_at IS NULL
-      `).get(emp.id) as { last_at: string | null };
+      `, [emp.id]);
 
-      const lastRecognizedAt = lastRow.last_at ?? null;
+      const lastRecognizedAt = lastRow?.last_at ?? null;
 
       const daysSinceRecognized = lastRecognizedAt
         ? Math.floor(
@@ -101,7 +102,7 @@ rrInsightsRouter.get('/nudges/people-to-recognize', (req: Request, res: Response
         lastRecognizedAt,
         daysSinceRecognized,
       };
-    });
+    }));
 
     // Sort: null (never recognized) first, then oldest recognized first
     nudges.sort((a, b) => {
@@ -128,7 +129,7 @@ rrInsightsRouter.get('/nudges/people-to-recognize', (req: Request, res: Response
 //   limit   — defaults to 5, max 25
 // ---------------------------------------------------------------------------
 
-rrInsightsRouter.get('/leaderboard', (req: Request, res: Response): void => {
+rrInsightsRouter.get('/leaderboard', async (req: Request, res: Response): Promise<void> => {
   try {
     const rawPeriod = (req.query['period'] as string | undefined) ?? 'month';
     const period: 'month' | 'quarter' = rawPeriod === 'quarter' ? 'quarter' : 'month';
@@ -151,13 +152,11 @@ rrInsightsRouter.get('/leaderboard', (req: Request, res: Response): void => {
       periodStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     }
 
-    const db = getDb();
-
     let rows: Array<{ person_id: string; count: number }>;
 
     if (metric === 'sent') {
       // Count shoutouts sent per sender
-      rows = db.prepare(`
+      rows = await sqlAll<{ person_id: string; count: number }>(`
         SELECT sender_id AS person_id, COUNT(*) AS count
         FROM rr_shoutouts
         WHERE visibility IN ('company', 'team')
@@ -166,10 +165,10 @@ rrInsightsRouter.get('/leaderboard', (req: Request, res: Response): void => {
         GROUP BY sender_id
         ORDER BY count DESC
         LIMIT ?
-      `).all(periodStart, limit) as Array<{ person_id: string; count: number }>;
+      `, [periodStart, limit]);
     } else {
       // Count shoutouts received per recipient
-      rows = db.prepare(`
+      rows = await sqlAll<{ person_id: string; count: number }>(`
         SELECT recipient_id AS person_id, COUNT(*) AS count
         FROM rr_shoutouts
         WHERE visibility IN ('company', 'team')
@@ -178,13 +177,13 @@ rrInsightsRouter.get('/leaderboard', (req: Request, res: Response): void => {
         GROUP BY recipient_id
         ORDER BY count DESC
         LIMIT ?
-      `).all(periodStart, limit) as Array<{ person_id: string; count: number }>;
+      `, [periodStart, limit]);
     }
 
     // Build employee lookup map from DB
     const ids = rows.map(r => r.person_id);
     const empRows = ids.length > 0
-      ? db.prepare(`SELECT * FROM rr_employees WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as EmployeeRow[]
+      ? await sqlAll<EmployeeRow>(`SELECT * FROM rr_employees WHERE id IN (${ids.map(() => '?').join(',')})`, ids)
       : [];
     const empMap = new Map(empRows.map(e => [e.id, e]));
 
@@ -218,7 +217,7 @@ rrInsightsRouter.get('/leaderboard', (req: Request, res: Response): void => {
 //   limit   — default 10, max 50
 // ---------------------------------------------------------------------------
 
-rrInsightsRouter.get('/feed/home', (req: Request, res: Response): void => {
+rrInsightsRouter.get('/feed/home', async (req: Request, res: Response): Promise<void> => {
   try {
     const rawScope = (req.query['scope'] as string | undefined) ?? 'company';
     const scope: 'company' | 'team' = rawScope === 'team' ? 'team' : 'company';
@@ -228,7 +227,7 @@ rrInsightsRouter.get('/feed/home', (req: Request, res: Response): void => {
 
     if (scope === 'company') {
       // Re-use the existing getShoutoutFeed helper — no filters = company feed
-      const { items, total } = getShoutoutFeed({ page, limit });
+      const { items, total } = await getShoutoutFeed({ page, limit });
       res.json({
         items,
         total,
@@ -243,15 +242,19 @@ rrInsightsRouter.get('/feed/home', (req: Request, res: Response): void => {
     // scope === 'team': find all teammates (people who share the same manager_email,
     // plus the manager themselves) and return shoutouts where sender or recipient
     // is in that set.
-    const db = getDb();
-    const requestingUser = db.prepare('SELECT * FROM rr_employees WHERE id = ?').get(userId) as EmployeeRow | undefined;
+    const requestingUser = await sqlGet<EmployeeRow>(
+      'SELECT * FROM rr_employees WHERE id = ?',
+      [userId]
+    );
     let teammateIds: Set<string>;
 
     if (requestingUser) {
       // Teammates = anyone managed by the same manager + the manager themselves
       const sameTeam = requestingUser.manager_email
-        ? db.prepare('SELECT id FROM rr_employees WHERE manager_email = ? OR id = ?')
-            .all(requestingUser.manager_email, requestingUser.manager_email) as {id: string}[]
+        ? await sqlAll<{ id: string }>(
+            'SELECT id FROM rr_employees WHERE manager_email = ? OR id = ?',
+            [requestingUser.manager_email, requestingUser.manager_email]
+          )
         : [{ id: userId }];
 
       teammateIds = new Set(sameTeam.map(e => e.id));
@@ -267,52 +270,53 @@ rrInsightsRouter.get('/feed/home', (req: Request, res: Response): void => {
 
     const offset = (page - 1) * limit;
 
-    const rows = db.prepare(`
+    const rows = await sqlAll<Record<string, unknown>>(`
       SELECT s.*
       FROM rr_shoutouts s
       WHERE (s.sender_id IN (${placeholders}) OR s.recipient_id IN (${placeholders}))
         AND s.deleted_at IS NULL
       ORDER BY s.created_at DESC
       LIMIT ? OFFSET ?
-    `).all(...idList, ...idList, limit, offset) as any[];
+    `, [...idList, ...idList, limit, offset]);
 
-    const countRow = db.prepare(`
+    const countRow = await sqlGet<{ n: number }>(`
       SELECT COUNT(*) AS n
       FROM rr_shoutouts s
       WHERE (s.sender_id IN (${placeholders}) OR s.recipient_id IN (${placeholders}))
         AND s.deleted_at IS NULL
-    `).get(...idList, ...idList) as { n: number };
+    `, [...idList, ...idList]);
 
     // Enrich each row with values and reactions — mirrors getShoutoutFeed shape
-    const items = rows.map((s: any) => {
-      const values = db.prepare(
+    const items = await Promise.all(rows.map(async (s) => {
+      const values = await sqlAll<{ id: string; label: string }>(
         'SELECT value_id AS id, value_label AS label FROM rr_shoutout_values WHERE shoutout_id = ?',
-      ).all(s.id) as Array<{ id: string; label: string }>;
+        [s['id']]
+      );
 
-      const reactions = db.prepare(`
+      const reactions = await sqlAll<{ emoji: string; count: number }>(`
         SELECT emoji, COUNT(*) AS count
         FROM rr_shoutout_reactions WHERE shoutout_id = ?
         GROUP BY emoji ORDER BY count DESC
-      `).all(s.id) as Array<{ emoji: string; count: number }>;
+      `, [s['id']]);
 
       return {
-        id: s.id,
-        senderId: s.sender_id,
-        senderName: s.sender_name,
-        recipientId: s.recipient_id,
-        recipientName: s.recipient_name,
-        message: s.message,
-        visibility: s.visibility,
-        source: s.source,
-        giftAmountCents: s.gift_amount_cents,
-        giftStatus: s.gift_status,
+        id: s['id'],
+        senderId: s['sender_id'],
+        senderName: s['sender_name'],
+        recipientId: s['recipient_id'],
+        recipientName: s['recipient_name'],
+        message: s['message'],
+        visibility: s['visibility'],
+        source: s['source'],
+        giftAmountCents: s['gift_amount_cents'],
+        giftStatus: s['gift_status'],
         values,
         reactions,
-        createdAt: s.created_at,
+        createdAt: s['created_at'],
       };
-    });
+    }));
 
-    const total = countRow.n;
+    const total = countRow?.n ?? 0;
 
     res.json({
       items,

@@ -7,7 +7,7 @@
  *
  * Flow:
  *   1. Validate body (employeeId, reason, message)
- *   2. Look up employee in stub directory
+ *   2. Look up employee in directory
  *   3. Write rr_classifications row (source='manual')
  *   4. Write rr_recognitions row (reward_status='pending')
  *   5. Fire Guusto order + poller (fire-and-forget)
@@ -16,7 +16,7 @@
 
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
-import { getDb } from '../db/schema.js';
+import { sqlGet, sqlRun } from '../db/pg.js';
 import { loadDirectory } from '../services/employeeResolver.js';
 import { placeGuustoOrder, pollOrderStatus } from '../services/guustoService.js';
 
@@ -58,13 +58,13 @@ recognizeRouter.post('/', async (req: Request, res: Response): Promise<void> => 
   }
 
   // --- Look up employee ---
-  const employee = loadDirectory().find(e => e.id === employeeId);
+  const directory = await loadDirectory();
+  const employee = directory.find(e => e.id === employeeId);
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
   }
 
-  const db = getDb();
   const now = new Date().toISOString();
   const classificationId = randomUUID();
   const recognitionId = randomUUID();
@@ -74,7 +74,7 @@ recognizeRouter.post('/', async (req: Request, res: Response): Promise<void> => 
   const managerFirstName = employee.managerFirstName;
 
   // --- Write classification row (source='manual') ---
-  db.prepare(`
+  await sqlRun(`
     INSERT INTO rr_classifications (
       id, gong_event_id, is_exceptional, confidence,
       employee_name_mentioned, evidence_quote, sentiment_magnitude,
@@ -88,7 +88,7 @@ recognizeRouter.post('/', async (req: Request, res: Response): Promise<void> => 
       ?, ?, ?, ?,
       ?, ?, ?, ?
     )
-  `).run(
+  `, [
     classificationId,
     `${employee.firstName} ${employee.lastName}`,
     message.trim(),           // evidence_quote = the manager's own message
@@ -102,16 +102,16 @@ recognizeRouter.post('/', async (req: Request, res: Response): Promise<void> => 
     employee.firstName,
     employee.lastName,
     now,
-  );
+  ]);
 
   // --- Write recognition row ---
-  db.prepare(`
+  await sqlRun(`
     INSERT INTO rr_recognitions (
       id, classification_id, employee_id, employee_first_name, employee_last_name,
       manager_id, evidence_quote, recognition_message,
       reward_amount_cents, reward_status, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2500, 'pending', ?)
-  `).run(
+  `, [
     recognitionId,
     classificationId,
     employee.id,
@@ -121,7 +121,7 @@ recognizeRouter.post('/', async (req: Request, res: Response): Promise<void> => 
     message.trim(),
     message.trim(),
     now,
-  );
+  ]);
 
   // --- Respond immediately ---
   res.status(201).json({
@@ -148,21 +148,21 @@ recognizeRouter.post('/', async (req: Request, res: Response): Promise<void> => 
       if (msg.includes('not set')) {
         console.warn(`[recognize] Guusto creds not configured — skipping reward for ${recognitionId}`);
         // Still mark as reward_sent for demo purposes when no creds
-        db.prepare("UPDATE rr_recognitions SET reward_status='reward_sent' WHERE id=?").run(recognitionId);
+        await sqlRun("UPDATE rr_recognitions SET reward_status='reward_sent' WHERE id=?", [recognitionId]);
       } else {
         console.error(`[recognize] Guusto order failed for ${recognitionId}:`, err);
-        db.prepare("UPDATE rr_recognitions SET reward_status='reward_failed' WHERE id=?").run(recognitionId);
+        await sqlRun("UPDATE rr_recognitions SET reward_status='reward_failed' WHERE id=?", [recognitionId]);
       }
     }
   })();
 });
 
 // GET /api/rr/recognize/status/:recognitionId — poll from FE
-recognizeRouter.get('/status/:id', (req: Request, res: Response): void => {
-  const db = getDb();
-  const row = db.prepare(
-    'SELECT reward_status, employee_first_name FROM rr_recognitions WHERE id = ?'
-  ).get(req.params.id) as { reward_status: string; employee_first_name: string } | undefined;
+recognizeRouter.get('/status/:id', async (req: Request, res: Response): Promise<void> => {
+  const row = await sqlGet<{ reward_status: string; employee_first_name: string }>(
+    'SELECT reward_status, employee_first_name FROM rr_recognitions WHERE id = ?',
+    [req.params.id]
+  );
 
   if (!row) {
     res.status(404).json({ error: 'Not found' });

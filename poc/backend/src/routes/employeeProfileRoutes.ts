@@ -12,7 +12,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { getDb } from '../db/schema.js';
+import { sqlAll, sqlGet } from '../db/pg.js';
 import { getRedemptionUrl } from '../services/guustoService.js';
 
 interface EmployeeRow {
@@ -34,13 +34,12 @@ export const employeeProfileRouter = Router();
 // GET /api/rr/employees/:id/recognitions — received timeline
 // ---------------------------------------------------------------------------
 
-employeeProfileRouter.get('/:id/recognitions', (req: Request, res: Response): void => {
+employeeProfileRouter.get('/:id/recognitions', async (req: Request, res: Response): Promise<void> => {
   const requesterId = req.headers['x-user-id'] as string | undefined;
   const requesterRole = (req.headers['x-user-role'] as string) || 'employee';
   const targetId = req.params.id;
 
-  const db = getDb();
-  const employee = db.prepare('SELECT * FROM rr_employees WHERE id = ?').get(targetId) as EmployeeRow | undefined;
+  const employee = await sqlGet<EmployeeRow>('SELECT * FROM rr_employees WHERE id = ?', [targetId]);
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
@@ -63,7 +62,7 @@ employeeProfileRouter.get('/:id/recognitions', (req: Request, res: Response): vo
       ? "s.visibility IN ('company','team','private')"
       : "s.visibility IN ('company','team')";
 
-  const shoutoutRows = db.prepare(`
+  const shoutoutRows = await sqlAll<Record<string, unknown>>(`
     SELECT
       s.id,
       s.sender_id,
@@ -78,29 +77,30 @@ employeeProfileRouter.get('/:id/recognitions', (req: Request, res: Response): vo
     WHERE s.recipient_id = ? AND ${visFilter}
     ORDER BY s.created_at DESC
     LIMIT ? OFFSET ?
-  `).all(targetId, limitNum, offset) as any[];
+  `, [targetId, limitNum, offset]);
 
-  const shoutoutItems = shoutoutRows.map(s => {
-    const values = db.prepare(
-      'SELECT value_id AS id, value_label AS label FROM rr_shoutout_values WHERE shoutout_id = ?'
-    ).all(s.id) as Array<{ id: string; label: string }>;
+  const shoutoutItems = await Promise.all(shoutoutRows.map(async s => {
+    const values = await sqlAll<{ id: string; label: string }>(
+      'SELECT value_id AS id, value_label AS label FROM rr_shoutout_values WHERE shoutout_id = ?',
+      [s['id']]
+    );
     return {
-      id: s.id,
+      id: s['id'],
       type: 'shoutout' as const,
-      senderId: s.sender_id,
-      senderName: s.sender_name,
-      message: s.message,
-      visibility: s.visibility,
-      source: s.source,
-      giftAmountCents: s.gift_amount_cents,
-      giftStatus: s.gift_status,
+      senderId: s['sender_id'],
+      senderName: s['sender_name'],
+      message: s['message'],
+      visibility: s['visibility'],
+      source: s['source'],
+      giftAmountCents: s['gift_amount_cents'],
+      giftStatus: s['gift_status'],
       values,
-      createdAt: s.created_at,
+      createdAt: s['created_at'],
     };
-  });
+  }));
 
   // Also surface Gong-pipeline recognitions for this employee
-  const gongRows = db.prepare(`
+  const gongRows = await sqlAll<Record<string, unknown>>(`
     SELECT
       r.id,
       r.recognition_message AS message,
@@ -111,39 +111,39 @@ employeeProfileRouter.get('/:id/recognitions', (req: Request, res: Response): vo
     WHERE r.employee_id = ?
     ORDER BY r.created_at DESC
     LIMIT 10
-  `).all(targetId) as any[];
+  `, [targetId]);
 
   const gongItems = gongRows.map(r => ({
-    id: r.id,
+    id: r['id'],
     type: 'gong_recognition' as const,
     senderName: 'Gong AI',
-    message: r.message,
+    message: r['message'],
     visibility: 'private' as const,
     source: 'gong' as const,
-    giftAmountCents: r.gift_amount_cents,
-    giftStatus: r.gift_status,
+    giftAmountCents: r['gift_amount_cents'],
+    giftStatus: r['gift_status'],
     values: [] as Array<{ id: string; label: string }>,
-    createdAt: r.created_at,
+    createdAt: r['created_at'],
   }));
 
   // Merge and sort by date descending
   const allItems = [...shoutoutItems, ...gongItems].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    (a, b) => new Date(b.createdAt as string).getTime() - new Date(a.createdAt as string).getTime()
   );
 
-  const total = (db.prepare(`
+  const totalRow = await sqlGet<{ n: number }>(`
     SELECT COUNT(*) AS n FROM rr_shoutouts s
     WHERE s.recipient_id = ? AND ${visFilter}
-  `).get(targetId) as { n: number }).n;
+  `, [targetId]);
 
   res.json({
     employeeId: targetId,
     employeeName: `${employee.first_name} ${employee.last_name}`,
     items: allItems,
-    total,
+    total: totalRow?.n ?? 0,
     page: pageNum,
     limit: limitNum,
-    totalPages: Math.ceil(total / limitNum),
+    totalPages: Math.ceil((totalRow?.n ?? 0) / limitNum),
     canSeeGiftAmounts: canSeeAmount,
   });
 });
@@ -152,14 +152,13 @@ employeeProfileRouter.get('/:id/recognitions', (req: Request, res: Response): vo
 // GET /api/rr/employees/:id/recognitions/sent — sent history
 // ---------------------------------------------------------------------------
 
-employeeProfileRouter.get('/:id/recognitions/sent', (req: Request, res: Response): void => {
+employeeProfileRouter.get('/:id/recognitions/sent', async (req: Request, res: Response): Promise<void> => {
   const requesterId = req.headers['x-user-id'] as string | undefined;
   const requesterRole = (req.headers['x-user-role'] as string) || 'employee';
   const targetId = req.params.id;
 
   // Only the sender themselves, their manager, or an admin can see sent history
-  const db = getDb();
-  const employee = db.prepare('SELECT * FROM rr_employees WHERE id = ?').get(targetId) as EmployeeRow | undefined;
+  const employee = await sqlGet<EmployeeRow>('SELECT * FROM rr_employees WHERE id = ?', [targetId]);
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
@@ -180,43 +179,45 @@ employeeProfileRouter.get('/:id/recognitions/sent', (req: Request, res: Response
   const limitNum = Math.min(50, Math.max(1, parseInt(limit ?? '20', 10)));
   const offset = (pageNum - 1) * limitNum;
 
-  const rows = db.prepare(`
+  const rows = await sqlAll<Record<string, unknown>>(`
     SELECT s.id, s.recipient_id, s.recipient_name, s.message,
            s.gift_amount_cents, s.gift_status, s.visibility, s.created_at
     FROM rr_shoutouts s
     WHERE s.sender_id = ?
     ORDER BY s.created_at DESC
     LIMIT ? OFFSET ?
-  `).all(targetId, limitNum, offset) as any[];
+  `, [targetId, limitNum, offset]);
 
-  const items = rows.map(s => {
-    const values = db.prepare(
-      'SELECT value_id AS id, value_label AS label FROM rr_shoutout_values WHERE shoutout_id = ?'
-    ).all(s.id) as Array<{ id: string; label: string }>;
+  const items = await Promise.all(rows.map(async s => {
+    const values = await sqlAll<{ id: string; label: string }>(
+      'SELECT value_id AS id, value_label AS label FROM rr_shoutout_values WHERE shoutout_id = ?',
+      [s['id']]
+    );
     return {
-      id: s.id,
-      recipientId: s.recipient_id,
-      recipientName: s.recipient_name,
-      message: s.message,
-      giftAmountCents: s.gift_amount_cents,
-      giftStatus: s.gift_status,
-      visibility: s.visibility,
+      id: s['id'],
+      recipientId: s['recipient_id'],
+      recipientName: s['recipient_name'],
+      message: s['message'],
+      giftAmountCents: s['gift_amount_cents'],
+      giftStatus: s['gift_status'],
+      visibility: s['visibility'],
       values,
-      createdAt: s.created_at,
+      createdAt: s['created_at'],
     };
-  });
+  }));
 
-  const total = (db.prepare(
-    'SELECT COUNT(*) AS n FROM rr_shoutouts WHERE sender_id = ?'
-  ).get(targetId) as { n: number }).n;
+  const totalRow = await sqlGet<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM rr_shoutouts WHERE sender_id = ?',
+    [targetId]
+  );
 
   res.json({
     employeeId: targetId,
     items,
-    total,
+    total: totalRow?.n ?? 0,
     page: pageNum,
     limit: limitNum,
-    totalPages: Math.ceil(total / limitNum),
+    totalPages: Math.ceil((totalRow?.n ?? 0) / limitNum),
   });
 });
 
@@ -224,35 +225,37 @@ employeeProfileRouter.get('/:id/recognitions/sent', (req: Request, res: Response
 // GET /api/rr/employees/:id/summary — quick profile stats (sidebar)
 // ---------------------------------------------------------------------------
 
-employeeProfileRouter.get('/:id/summary', (req: Request, res: Response): void => {
+employeeProfileRouter.get('/:id/summary', async (req: Request, res: Response): Promise<void> => {
   const targetId = req.params.id;
-  const db = getDb();
-  const employee = db.prepare('SELECT * FROM rr_employees WHERE id = ?').get(targetId) as EmployeeRow | undefined;
+  const employee = await sqlGet<EmployeeRow>('SELECT * FROM rr_employees WHERE id = ?', [targetId]);
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
   }
   const since90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
 
-  const received90 = (db.prepare(
-    "SELECT COUNT(*) AS n FROM rr_shoutouts WHERE recipient_id = ? AND created_at >= ?"
-  ).get(targetId, since90) as { n: number }).n;
+  const received90Row = await sqlGet<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM rr_shoutouts WHERE recipient_id = ? AND created_at >= ?",
+    [targetId, since90]
+  );
 
-  const sent90 = (db.prepare(
-    'SELECT COUNT(*) AS n FROM rr_shoutouts WHERE sender_id = ? AND created_at >= ?'
-  ).get(targetId, since90) as { n: number }).n;
+  const sent90Row = await sqlGet<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM rr_shoutouts WHERE sender_id = ? AND created_at >= ?',
+    [targetId, since90]
+  );
 
-  const topValues = db.prepare(`
+  const topValues = await sqlAll<{ label: string; count: number }>(`
     SELECT sv.value_label AS label, COUNT(*) AS count
     FROM rr_shoutout_values sv
     JOIN rr_shoutouts s ON s.id = sv.shoutout_id
     WHERE s.recipient_id = ? AND s.created_at >= ?
     GROUP BY sv.value_label ORDER BY count DESC LIMIT 3
-  `).all(targetId, since90) as Array<{ label: string; count: number }>;
+  `, [targetId, since90]);
 
-  const lastRec = db.prepare(
-    'SELECT created_at FROM rr_shoutouts WHERE recipient_id = ? ORDER BY created_at DESC LIMIT 1'
-  ).get(targetId) as { created_at: string } | undefined;
+  const lastRec = await sqlGet<{ created_at: string }>(
+    'SELECT created_at FROM rr_shoutouts WHERE recipient_id = ? ORDER BY created_at DESC LIMIT 1',
+    [targetId]
+  );
 
   const daysSince = lastRec
     ? Math.floor((Date.now() - new Date(lastRec.created_at).getTime()) / 86_400_000)
@@ -262,7 +265,7 @@ employeeProfileRouter.get('/:id/summary', (req: Request, res: Response): void =>
     employeeId: targetId,
     name: `${employee.first_name} ${employee.last_name}`,
     email: employee.email,
-    last90Days: { received: received90, sent: sent90 },
+    last90Days: { received: received90Row?.n ?? 0, sent: sent90Row?.n ?? 0 },
     topValues,
     lastReceivedAt: lastRec?.created_at ?? null,
     daysSinceLastRecognized: daysSince,
@@ -282,7 +285,7 @@ employeeProfileRouter.get('/:id/summary', (req: Request, res: Response): void =>
 // Until the commercial agreement adds CC to the whitelist, links open in a new tab.
 // ---------------------------------------------------------------------------
 
-employeeProfileRouter.get('/:id/gifts', (req: Request, res: Response): void => {
+employeeProfileRouter.get('/:id/gifts', async (req: Request, res: Response): Promise<void> => {
   const requesterId = req.headers['x-user-id'] as string | undefined;
   const targetId = req.params.id;
 
@@ -292,15 +295,25 @@ employeeProfileRouter.get('/:id/gifts', (req: Request, res: Response): void => {
     return;
   }
 
-  const db = getDb();
-  const employee = db.prepare('SELECT * FROM rr_employees WHERE id = ?').get(targetId) as EmployeeRow | undefined;
+  const employee = await sqlGet<EmployeeRow>('SELECT * FROM rr_employees WHERE id = ?', [targetId]);
   if (!employee) {
     res.status(404).json({ error: 'Employee not found' });
     return;
   }
 
   // Join orders to shoutouts (Phase 1+ flow) and legacy recognitions
-  const orders = db.prepare(`
+  const orders = await sqlAll<{
+    id: string;
+    recognition_id: string;
+    guusto_request_id: string;
+    status: string;
+    redemption_url: string | null;
+    amount_cents: number;
+    currency: string;
+    created_at: string;
+    sender_name: string | null;
+    message: string | null;
+  }>(`
     SELECT
       o.id,
       o.recognition_id,
@@ -318,18 +331,7 @@ employeeProfileRouter.get('/:id/gifts', (req: Request, res: Response): void => {
     WHERE o.employee_email = ?
     ORDER BY o.created_at DESC
     LIMIT 20
-  `).all(employee.email) as Array<{
-    id: string;
-    recognition_id: string;
-    guusto_request_id: string;
-    status: string;
-    redemption_url: string | null;
-    amount_cents: number;
-    currency: string;
-    created_at: string;
-    sender_name: string | null;
-    message: string | null;
-  }>;
+  `, [employee.email]);
 
   const gifts = orders.map(o => {
     // For any shoutout-linked order without a stored URL, try live lookup

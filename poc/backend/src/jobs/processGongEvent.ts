@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { getDb } from '../db/schema.js';
+import { sqlGet, sqlRun } from '../db/pg.js';
 import { classifyTranscript } from '../services/classifier.js';
 import { resolveEmployee, STUB_EMPLOYEES } from '../services/employeeResolver.js';
 import { createApprovalToken, createIdentifyToken } from '../services/approvalService.js';
@@ -121,12 +121,8 @@ async function extractTranscriptText(payload: GongWebhookPayload): Promise<strin
 }
 
 /** Update a gong_event row's status. */
-function updateEventStatus(eventId: string, status: string): void {
-  const db = getDb();
-  db.prepare('UPDATE gong_events SET status = ? WHERE id = ?').run(
-    status,
-    eventId
-  );
+async function updateEventStatus(eventId: string, status: string): Promise<void> {
+  await sqlRun('UPDATE gong_events SET status = ? WHERE id = ?', [status, eventId]);
 }
 
 /** Sleep for a given number of milliseconds. */
@@ -143,14 +139,11 @@ function sleep(ms: number): Promise<void> {
  * Designed to be called fire-and-forget (do NOT await in the webhook handler).
  */
 export async function processGongEvent(eventId: string): Promise<void> {
-  const db = getDb();
-
   // 1. Load the event
-  const row = db
-    .prepare('SELECT * FROM gong_events WHERE id = ?')
-    .get(eventId) as
-    | { id: string; call_id: string; payload: string; status: string; call_url: string | null; call_title: string | null }
-    | undefined;
+  const row = await sqlGet<{ id: string; call_id: string; payload: string; status: string; call_url: string | null; call_title: string | null }>(
+    'SELECT * FROM gong_events WHERE id = ?',
+    [eventId]
+  );
 
   if (!row) {
     console.error(`[processGongEvent] Event not found: ${eventId}`);
@@ -172,7 +165,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
     };
   } catch {
     console.error(`[processGongEvent] Could not parse payload for ${eventId}`);
-    updateEventStatus(eventId, 'failed');
+    await updateEventStatus(eventId, 'failed');
     return;
   }
 
@@ -180,7 +173,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
   const transcriptText = await extractTranscriptText(payload);
   if (!transcriptText) {
     console.warn(`[processGongEvent] No transcript content for ${eventId}`);
-    updateEventStatus(eventId, 'no_transcript');
+    await updateEventStatus(eventId, 'no_transcript');
     return;
   }
 
@@ -192,7 +185,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
   } catch (err) {
     if (err instanceof ClassifierError && err.retryable) {
       console.warn(
-        `[processGongEvent] Classifier retryable error for ${eventId}, retrying in 60s: ${err.message}`
+        `[processGongEvent] Classifier retryable error for ${eventId}, retrying in 60s: ${(err as Error).message}`
       );
       await sleep(60_000);
       try {
@@ -202,7 +195,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
           `[processGongEvent] Classifier failed after retry for ${eventId}:`,
           retryErr
         );
-        updateEventStatus(eventId, 'failed');
+        await updateEventStatus(eventId, 'failed');
         return;
       }
     } else {
@@ -210,7 +203,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
         `[processGongEvent] Non-retryable classifier error for ${eventId}:`,
         err
       );
-      updateEventStatus(eventId, 'failed');
+      await updateEventStatus(eventId, 'failed');
       return;
     }
   }
@@ -220,7 +213,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
     console.log(
       `[processGongEvent] Below threshold for ${eventId}: ${classifyResult.reasoning}`
     );
-    updateEventStatus(eventId, 'below_threshold');
+    await updateEventStatus(eventId, 'below_threshold');
     return;
   }
 
@@ -228,7 +221,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
     console.log(
       `[processGongEvent] No employee identified for ${eventId}: ${classifyResult.reasoning}`
     );
-    updateEventStatus(eventId, 'no_employee_identified');
+    await updateEventStatus(eventId, 'no_employee_identified');
     return;
   }
 
@@ -236,7 +229,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
   const classData: ClassificationToolResult = classifyResult.data;
 
   // 5. Resolve employee
-  const resolverResult = resolveEmployee(
+  const resolverResult = await resolveEmployee(
     classData.employee_name_mentioned ?? ''
   );
 
@@ -255,13 +248,13 @@ export async function processGongEvent(eventId: string): Promise<void> {
     // Persist classification so we have the evidence when manager responds
     const classificationId = randomUUID();
     const now = new Date().toISOString();
-    db.prepare(`
+    await sqlRun(`
       INSERT INTO rr_classifications (
         id, gong_event_id, is_exceptional, confidence,
         employee_name_mentioned, evidence_quote, sentiment_magnitude,
         recognition_draft, reasoning, status, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'needs_employee_review', ?)
-    `).run(
+    `, [
       classificationId, eventId,
       classData.is_exceptional_praise ? 1 : 0,
       classData.confidence,
@@ -271,11 +264,11 @@ export async function processGongEvent(eventId: string): Promise<void> {
       classData.recognition_draft,
       classData.reasoning,
       now
-    );
+    ]);
 
     // Create identify token and send manager email
     try {
-      const { token } = createIdentifyToken(classificationId);
+      const { token } = await createIdentifyToken(classificationId);
       const baseUrl = process.env.APP_BASE_URL ?? 'http://localhost:3001';
       const managerEmail = process.env.MANAGER_EMAIL ?? 'manager@demo.com';
 
@@ -295,7 +288,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
       console.error(`[processGongEvent] Failed to send identify email for ${classificationId}:`, emailErr);
     }
 
-    updateEventStatus(eventId, 'needs_employee_review');
+    await updateEventStatus(eventId, 'needs_employee_review');
     return;
   }
 
@@ -306,7 +299,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
   const classificationId = randomUUID();
   const now = new Date().toISOString();
 
-  db.prepare(`
+  await sqlRun(`
     INSERT INTO rr_classifications (
       id, gong_event_id, is_exceptional, confidence,
       employee_name_mentioned, evidence_quote, sentiment_magnitude,
@@ -317,7 +310,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
       ?, ?, ?, ?, ?, ?, ?, ?, ?, 'resolved',
       ?, ?, ?, ?, ?, ?, ?, ?
     )
-  `).run(
+  `, [
     classificationId,
     eventId,
     classData.is_exceptional_praise ? 1 : 0,
@@ -335,18 +328,18 @@ export async function processGongEvent(eventId: string): Promise<void> {
     employee.firstName,
     employee.lastName,
     now
-  );
+  ]);
 
   // 7. Persist recognition row (optimistic — reward_status starts as 'pending')
   const recognitionId = randomUUID();
 
-  db.prepare(`
+  await sqlRun(`
     INSERT INTO rr_recognitions (
       id, classification_id, employee_id, employee_first_name, employee_last_name,
       manager_id, evidence_quote, recognition_message,
       reward_amount_cents, reward_status, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2500, 'pending', ?)
-  `).run(
+  `, [
     recognitionId,
     classificationId,
     employee.id,
@@ -356,11 +349,11 @@ export async function processGongEvent(eventId: string): Promise<void> {
     classData.evidence_quote,
     classData.recognition_draft,
     now
-  );
+  ]);
 
   // 8. Send manager approval email
   try {
-    const { token } = createApprovalToken(recognitionId);
+    const { token } = await createApprovalToken(recognitionId);
     const baseUrl = process.env.APP_BASE_URL ?? 'http://localhost:3001';
     const managerEmail = process.env.MANAGER_EMAIL ?? employee.managerEmail;
 
@@ -389,7 +382,7 @@ export async function processGongEvent(eventId: string): Promise<void> {
   }
 
   // 9. Mark event as classified
-  updateEventStatus(eventId, 'classified');
+  await updateEventStatus(eventId, 'classified');
 
   console.log(
     `[processGongEvent] Pipeline complete for event ${eventId}. ` +

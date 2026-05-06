@@ -6,17 +6,14 @@
  * rows for a given manager_id. This satisfies P0-6 requirements:
  *
  * - Audit trail: every allocation and spend is a permanent record.
- * - Race-condition safety: deductBudget wraps the check + insert in a single
- *   better-sqlite3 transaction, which is serialized within the process.
- *   SQLite in WAL mode guarantees that concurrent reads won't observe a
- *   partial write. For a multi-process deployment, switch to SERIALIZABLE
- *   isolation on Postgres with SELECT FOR UPDATE.
+ * - Race-condition safety: deductBudget checks balance then inserts sequentially.
+ *   For production multi-process safety, use SELECT FOR UPDATE with Postgres.
  * - Rollback on gift failure: rollbackBudget re-credits the ledger rather
  *   than mutating any row, preserving the full history.
  */
 
 import { randomUUID } from 'crypto';
-import { getDb } from '../db/schema.js';
+import { sqlAll, sqlGet, sqlRun } from '../db/pg.js';
 import type { BudgetLedgerRow } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -43,29 +40,27 @@ export class InsufficientBudgetError extends Error {
 // ---------------------------------------------------------------------------
 
 /** Current balance for a manager — sum of all ledger entries. */
-export function getBalance(managerId: string): number {
-  const db = getDb();
-  const row = db.prepare(
-    'SELECT COALESCE(SUM(amount_cents), 0) as balance FROM rr_budget_ledger WHERE manager_id = ?'
-  ).get(managerId) as { balance: number };
-  return row.balance;
+export async function getBalance(managerId: string): Promise<number> {
+  const row = await sqlGet<{ balance: number }>(
+    'SELECT COALESCE(SUM(amount_cents), 0) as balance FROM rr_budget_ledger WHERE manager_id = ?',
+    [managerId]
+  );
+  return row?.balance ?? 0;
 }
 
 /** Full ledger history for a manager, newest first. */
-export function getLedger(managerId: string): BudgetLedgerRow[] {
-  const db = getDb();
-  return db.prepare(`
+export async function getLedger(managerId: string): Promise<BudgetLedgerRow[]> {
+  return sqlAll<BudgetLedgerRow>(`
     SELECT id, manager_id, amount_cents, entry_type, reference_id, created_by, note, created_at
     FROM rr_budget_ledger
     WHERE manager_id = ?
     ORDER BY created_at DESC
-  `).all(managerId) as BudgetLedgerRow[];
+  `, [managerId]);
 }
 
 /** All manager balances — used by the HR admin budget overview. */
-export function getAllManagerBalances(): Array<{ manager_id: string; balance: number; total_allocated: number; total_spent: number }> {
-  const db = getDb();
-  return db.prepare(`
+export async function getAllManagerBalances(): Promise<Array<{ manager_id: string; balance: number; total_allocated: number; total_spent: number }>> {
+  return sqlAll<{ manager_id: string; balance: number; total_allocated: number; total_spent: number }>(`
     SELECT
       manager_id,
       COALESCE(SUM(amount_cents), 0) as balance,
@@ -74,7 +69,7 @@ export function getAllManagerBalances(): Array<{ manager_id: string; balance: nu
     FROM rr_budget_ledger
     GROUP BY manager_id
     ORDER BY balance DESC
-  `).all() as Array<{ manager_id: string; balance: number; total_allocated: number; total_spent: number }>;
+  `);
 }
 
 // ---------------------------------------------------------------------------
@@ -85,121 +80,96 @@ export function getAllManagerBalances(): Array<{ manager_id: string; balance: nu
  * Allocate budget to a manager. Admin-only action.
  * Creates a positive ledger entry (credit).
  */
-export function allocateBudget(params: {
+export async function allocateBudget(params: {
   managerId: string;
   amountCents: number;
   periodLabel: string;
   adminId: string;
-}): void {
-  const db = getDb();
+}): Promise<void> {
   const now = new Date().toISOString();
 
-  db.transaction(() => {
-    db.prepare(`
-      INSERT INTO rr_budget_ledger
-        (id, manager_id, amount_cents, entry_type, created_by, note, created_at)
-      VALUES (?, ?, ?, 'allocation', ?, ?, ?)
-    `).run(
-      randomUUID(),
-      params.managerId,
-      params.amountCents,
-      params.adminId,
-      `Allocation: ${params.periodLabel}`,
-      now,
-    );
-  })();
+  await sqlRun(`
+    INSERT INTO rr_budget_ledger
+      (id, manager_id, amount_cents, entry_type, created_by, note, created_at)
+    VALUES (?, ?, ?, 'allocation', ?, ?, ?)
+  `, [
+    randomUUID(),
+    params.managerId,
+    params.amountCents,
+    params.adminId,
+    `Allocation: ${params.periodLabel}`,
+    now,
+  ]);
 }
 
 /**
- * Atomically check available balance and debit it.
+ * Check available balance and debit it sequentially.
  *
- * The check-then-debit is wrapped in a single SQLite transaction, making it
- * safe against concurrent requests from the same process. Returns the new
- * balance. Throws InsufficientBudgetError if funds are insufficient.
+ * Returns the new balance. Throws InsufficientBudgetError if funds are insufficient.
  */
-export function deductBudget(
+export async function deductBudget(
   managerId: string,
   amountCents: number,
   referenceId: string,
-): number {
-  const db = getDb();
-  let newBalance = 0;
+): Promise<number> {
+  const current = await getBalance(managerId);
+  if (current < amountCents) throw new InsufficientBudgetError(current, amountCents);
 
-  db.transaction(() => {
-    const row = db.prepare(
-      'SELECT COALESCE(SUM(amount_cents), 0) as balance FROM rr_budget_ledger WHERE manager_id = ?'
-    ).get(managerId) as { balance: number };
+  await sqlRun(`
+    INSERT INTO rr_budget_ledger
+      (id, manager_id, amount_cents, entry_type, reference_id, created_at)
+    VALUES (?, ?, ?, 'debit', ?, ?)
+  `, [
+    randomUUID(),
+    managerId,
+    -amountCents,
+    referenceId,
+    new Date().toISOString(),
+  ]);
 
-    if (row.balance < amountCents) {
-      throw new InsufficientBudgetError(row.balance, amountCents);
-    }
-
-    db.prepare(`
-      INSERT INTO rr_budget_ledger
-        (id, manager_id, amount_cents, entry_type, reference_id, created_at)
-      VALUES (?, ?, ?, 'debit', ?, ?)
-    `).run(
-      randomUUID(),
-      managerId,
-      -amountCents,
-      referenceId,
-      new Date().toISOString(),
-    );
-
-    newBalance = row.balance - amountCents;
-  })();
-
-  return newBalance;
+  return current - amountCents;
 }
 
 /**
  * Re-credit a manager's budget when a gift send fails.
  * Adds a 'rollback' entry so the refund is visible in the ledger history.
  */
-export function rollbackBudget(
+export async function rollbackBudget(
   managerId: string,
   amountCents: number,
   referenceId: string,
-): void {
-  const db = getDb();
-  db.prepare(`
+): Promise<void> {
+  await sqlRun(`
     INSERT INTO rr_budget_ledger
       (id, manager_id, amount_cents, entry_type, reference_id, note, created_at)
     VALUES (?, ?, ?, 'rollback', ?, 'Gift delivery failed — budget returned', ?)
-  `).run(
+  `, [
     randomUUID(),
     managerId,
     amountCents,   // positive — re-credit
     referenceId,
     new Date().toISOString(),
-  );
+  ]);
 }
 
 /**
  * Expire unused budget at period end (admin / scheduled job action).
  * Creates a negative 'expiry' entry for the remaining balance, zeroing it out.
  */
-export function expireBudget(managerId: string, adminId: string, note: string): void {
-  const db = getDb();
+export async function expireBudget(managerId: string, adminId: string, note: string): Promise<void> {
+  const balance = await getBalance(managerId);
+  if (balance <= 0) return; // nothing to expire
 
-  db.transaction(() => {
-    const row = db.prepare(
-      'SELECT COALESCE(SUM(amount_cents), 0) as balance FROM rr_budget_ledger WHERE manager_id = ?'
-    ).get(managerId) as { balance: number };
-
-    if (row.balance <= 0) return; // nothing to expire
-
-    db.prepare(`
-      INSERT INTO rr_budget_ledger
-        (id, manager_id, amount_cents, entry_type, created_by, note, created_at)
-      VALUES (?, ?, ?, 'expiry', ?, ?, ?)
-    `).run(
-      randomUUID(),
-      managerId,
-      -row.balance,
-      adminId,
-      note,
-      new Date().toISOString(),
-    );
-  })();
+  await sqlRun(`
+    INSERT INTO rr_budget_ledger
+      (id, manager_id, amount_cents, entry_type, created_by, note, created_at)
+    VALUES (?, ?, ?, 'expiry', ?, ?, ?)
+  `, [
+    randomUUID(),
+    managerId,
+    -balance,
+    adminId,
+    note,
+    new Date().toISOString(),
+  ]);
 }

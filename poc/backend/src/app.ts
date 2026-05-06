@@ -24,7 +24,7 @@ import { automationRouter } from './routes/automationRoutes.js';
 import { rrInsightsRouter } from './routes/rrInsightsRoutes.js';
 import { pendingGiftsRouter } from './routes/pendingGiftsRoutes.js';
 import { orgChartRouter } from './routes/orgChartRoutes.js';
-import { sqlAll, sqlGet } from './db/pg.js';
+import { sqlAll } from './db/pg.js';
 
 export const app = express();
 

@@ -44,7 +44,7 @@ function toPositional(query: string): string {
 }
 
 /** Execute a SELECT and return all matching rows. */
-export async function sqlAll<T extends Record<string, unknown>>(
+export async function sqlAll<T extends object = Record<string, unknown>>(
   query: string,
   params: unknown[] = []
 ): Promise<T[]> {
@@ -53,7 +53,7 @@ export async function sqlAll<T extends Record<string, unknown>>(
 }
 
 /** Execute a SELECT and return the first row, or undefined if not found. */
-export async function sqlGet<T extends Record<string, unknown>>(
+export async function sqlGet<T extends object = Record<string, unknown>>(
   query: string,
   params: unknown[] = []
 ): Promise<T | undefined> {

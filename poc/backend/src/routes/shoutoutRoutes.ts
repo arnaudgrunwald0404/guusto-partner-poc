@@ -13,7 +13,7 @@
 
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
-import { getDb } from '../db/schema.js';
+import { sqlAll, sqlGet, sqlRun } from '../db/pg.js';
 import { STUB_EMPLOYEES } from '../services/employeeResolver.js';
 import {
   createShoutout,
@@ -64,10 +64,9 @@ shoutoutRouter.post('/', async (req: Request, res: Response): Promise<void> => {
   }
 
   // --- Load tenant config ---
-  const db = getDb();
-  const configRows = db.prepare(
+  const configRows = await sqlAll<{ key: string; value: string }>(
     'SELECT key, value FROM rr_tenant_config'
-  ).all() as Array<{ key: string; value: string }>;
+  );
   const cfg = Object.fromEntries(configRows.map(r => [r.key, r.value]));
 
   const minChars = parseInt(cfg['message_min_chars'] ?? '50', 10);
@@ -97,28 +96,59 @@ shoutoutRouter.post('/', async (req: Request, res: Response): Promise<void> => {
   const vis = (visibility && VALID_VIS.includes(visibility) ? visibility : defaultVis) as
     'company' | 'team' | 'private';
 
-  // --- Resolve sender ---
-  const sender = STUB_EMPLOYEES.find(e => e.id === senderId);
-  if (!sender) {
+  // --- Resolve sender (try DB first, fall back to STUB_EMPLOYEES) ---
+  interface EmployeeRecord {
+    id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    manager_email: string | null;
+    manager_name: string | null;
+  }
+
+  const senderRow = await sqlGet<EmployeeRecord>(
+    'SELECT id, first_name, last_name, email, manager_email, manager_name FROM rr_employees WHERE id = ?',
+    [senderId]
+  );
+  const senderStub = STUB_EMPLOYEES.find(e => e.id === senderId);
+
+  if (!senderRow && !senderStub) {
     res.status(404).json({ error: 'Sender not found in employee directory' });
     return;
   }
 
-  // --- Resolve recipient ---
-  const recipient = STUB_EMPLOYEES.find(e => e.id === recipientId);
-  if (!recipient) {
+  const senderName = senderRow
+    ? `${senderRow.first_name} ${senderRow.last_name}`
+    : `${senderStub!.firstName} ${senderStub!.lastName}`;
+  const senderEmail = senderRow?.email ?? senderStub!.email;
+
+  // --- Resolve recipient (try DB first, fall back to STUB_EMPLOYEES) ---
+  const recipientRow = await sqlGet<EmployeeRecord>(
+    'SELECT id, first_name, last_name, email, manager_email, manager_name FROM rr_employees WHERE id = ?',
+    [recipientId]
+  );
+  const recipientStub = STUB_EMPLOYEES.find(e => e.id === recipientId);
+
+  if (!recipientRow && !recipientStub) {
     res.status(404).json({ error: 'Recipient not found in employee directory' });
     return;
   }
+
+  const recipientName = recipientRow
+    ? `${recipientRow.first_name} ${recipientRow.last_name}`
+    : `${recipientStub!.firstName} ${recipientStub!.lastName}`;
+  const recipientEmail = recipientRow?.email ?? recipientStub!.email;
+  const recipientFirstName = recipientRow?.first_name ?? recipientStub!.firstName;
+  const recipientLastName = recipientRow?.last_name ?? recipientStub!.lastName;
 
   // --- Validate value IDs ---
   let resolvedValues: Array<{ id: string; label: string }> = [];
   if (valueIds && valueIds.length > 0) {
     const placeholders = valueIds.map(() => '?').join(',');
-    const dbValues = db.prepare(`
+    const dbValues = await sqlAll<{ id: string; label: string }>(`
       SELECT id, label FROM rr_company_values
       WHERE id IN (${placeholders}) AND is_active = 1
-    `).all(...valueIds) as Array<{ id: string; label: string }>;
+    `, valueIds);
 
     if (dbValues.length !== valueIds.length) {
       res.status(400).json({ error: 'One or more value IDs are invalid or inactive' });
@@ -154,12 +184,12 @@ shoutoutRouter.post('/', async (req: Request, res: Response): Promise<void> => {
   // --- Create shoutout (budget deduction is atomic inside createShoutout) ---
   let shoutoutId: string;
   try {
-    shoutoutId = createShoutout({
+    shoutoutId = await createShoutout({
       senderId,
-      senderName: `${sender.firstName} ${sender.lastName}`,
+      senderName,
       recipientId,
-      recipientName: `${recipient.firstName} ${recipient.lastName}`,
-      recipientEmail: recipient.email,
+      recipientName,
+      recipientEmail,
       message: message.trim(),
       visibility: vis,
       valueIds: resolvedValues.map(v => v.id),
@@ -183,8 +213,8 @@ shoutoutRouter.post('/', async (req: Request, res: Response): Promise<void> => {
   // --- Respond immediately ---
   res.status(201).json({
     shoutoutId,
-    recipientName: `${recipient.firstName} ${recipient.lastName}`,
-    senderName: `${sender.firstName} ${sender.lastName}`,
+    recipientName,
+    senderName,
     message: message.trim(),
     values: resolvedValues,
     visibility: vis,
@@ -198,9 +228,9 @@ shoutoutRouter.post('/', async (req: Request, res: Response): Promise<void> => {
   // RR-030: notification email to recipient
   void notifyShoutoutRecipient({
     shoutoutId,
-    recipientFirstName: recipient.firstName,
-    recipientEmail: recipient.email,
-    senderName: `${sender.firstName} ${sender.lastName}`,
+    recipientFirstName,
+    recipientEmail,
+    senderName,
     message: message.trim(),
     valueLabels: resolvedValues.map(v => v.label),
     hasGift: !!giftCents,
@@ -212,10 +242,10 @@ shoutoutRouter.post('/', async (req: Request, res: Response): Promise<void> => {
     void attachGuustoGift({
       shoutoutId,
       senderId,
-      senderEmail: sender.email,
-      recipientEmail: recipient.email,
-      recipientFirstName: recipient.firstName,
-      recipientLastName: recipient.lastName,
+      senderEmail,
+      recipientEmail,
+      recipientFirstName,
+      recipientLastName,
       amountCents: giftCents,
       message: message.trim(),
     });
@@ -228,7 +258,7 @@ shoutoutRouter.post('/', async (req: Request, res: Response): Promise<void> => {
 // Must be registered BEFORE /:id so Express doesn't treat "since" as an ID.
 // ---------------------------------------------------------------------------
 
-shoutoutRouter.get('/since', (req: Request, res: Response): void => {
+shoutoutRouter.get('/since', async (req: Request, res: Response): Promise<void> => {
   const { after, limit } = req.query as Record<string, string>;
 
   if (!after) {
@@ -236,10 +266,14 @@ shoutoutRouter.get('/since', (req: Request, res: Response): void => {
     return;
   }
 
-  const db = getDb();
   const cap = Math.min(50, parseInt(limit ?? '20', 10));
 
-  const rows = db.prepare(`
+  const rows = await sqlAll<{
+    id: string;
+    sender_name: string;
+    recipient_name: string;
+    created_at: string;
+  }>(`
     SELECT s.id, s.sender_name, s.recipient_name, s.created_at
     FROM rr_shoutouts s
     WHERE s.visibility = 'company'
@@ -247,12 +281,7 @@ shoutoutRouter.get('/since', (req: Request, res: Response): void => {
       AND s.deleted_at IS NULL
     ORDER BY s.created_at ASC
     LIMIT ?
-  `).all(after, cap) as Array<{
-    id: string;
-    sender_name: string;
-    recipient_name: string;
-    created_at: string;
-  }>;
+  `, [after, cap]);
 
   res.json({
     items: rows.map(r => ({
@@ -269,10 +298,10 @@ shoutoutRouter.get('/since', (req: Request, res: Response): void => {
 // GET /api/rr/shoutouts — recognition feed
 // ---------------------------------------------------------------------------
 
-shoutoutRouter.get('/', (req: Request, res: Response): void => {
+shoutoutRouter.get('/', async (req: Request, res: Response): Promise<void> => {
   const { recipientId, senderId, valueId, page, limit } = req.query as Record<string, string>;
 
-  const { items, total } = getShoutoutFeed({
+  const { items, total } = await getShoutoutFeed({
     recipientId,
     senderId,
     valueId,
@@ -297,12 +326,11 @@ shoutoutRouter.get('/', (req: Request, res: Response): void => {
 // Must be registered BEFORE /:id to avoid Express matching "public" as an ID.
 // ---------------------------------------------------------------------------
 
-shoutoutRouter.get('/public/:id', (req: Request, res: Response): void => {
-  const db = getDb();
-
-  const s = db.prepare(
-    'SELECT * FROM rr_shoutouts WHERE id = ? AND deleted_at IS NULL'
-  ).get(req.params.id) as any;
+shoutoutRouter.get('/public/:id', async (req: Request, res: Response): Promise<void> => {
+  const s = await sqlGet<Record<string, unknown>>(
+    'SELECT * FROM rr_shoutouts WHERE id = ? AND deleted_at IS NULL',
+    [req.params.id]
+  );
 
   if (!s) {
     res.status(404).json({ error: 'Recognition not found' });
@@ -310,45 +338,47 @@ shoutoutRouter.get('/public/:id', (req: Request, res: Response): void => {
   }
 
   // Private shoutouts are never shown on public pages
-  if (s.visibility === 'private') {
+  if (s['visibility'] === 'private') {
     res.status(403).json({ error: 'This recognition is private' });
     return;
   }
 
-  const values = db.prepare(
-    'SELECT value_id as id, value_label as label FROM rr_shoutout_values WHERE shoutout_id = ?'
-  ).all(s.id) as Array<{ id: string; label: string }>;
+  const values = await sqlAll<{ id: string; label: string }>(
+    'SELECT value_id as id, value_label as label FROM rr_shoutout_values WHERE shoutout_id = ?',
+    [s['id']]
+  );
 
-  const reactions = db.prepare(`
+  const reactions = await sqlAll<{ emoji: string; count: number }>(`
     SELECT emoji, COUNT(*) as count
     FROM rr_shoutout_reactions WHERE shoutout_id = ?
     GROUP BY emoji ORDER BY count DESC
-  `).all(s.id) as Array<{ emoji: string; count: number }>;
+  `, [s['id']]);
 
   // Look up emoji from company values table
   const valueIds = values.map(v => v.id);
   let valuesWithEmoji: Array<{ id: string; label: string; emoji: string }> = [];
   if (valueIds.length > 0) {
     const placeholders = valueIds.map(() => '?').join(',');
-    const dbValues = db.prepare(
-      `SELECT id, label, emoji FROM rr_company_values WHERE id IN (${placeholders})`
-    ).all(...valueIds) as Array<{ id: string; label: string; emoji: string }>;
+    const dbValues = await sqlAll<{ id: string; label: string; emoji: string }>(
+      `SELECT id, label, emoji FROM rr_company_values WHERE id IN (${placeholders})`,
+      valueIds
+    );
     const emojiMap = Object.fromEntries(dbValues.map(v => [v.id, v.emoji]));
     valuesWithEmoji = values.map(v => ({ ...v, emoji: emojiMap[v.id] ?? '⭐' }));
   }
 
   res.json({
-    id: s.id,
-    senderName: s.sender_name,
-    recipientId: s.recipient_id,
-    recipientName: s.recipient_name,
-    message: s.message,
-    visibility: s.visibility,
-    giftAmountCents: s.gift_amount_cents,
-    giftStatus: s.gift_status,
+    id: s['id'],
+    senderName: s['sender_name'],
+    recipientId: s['recipient_id'],
+    recipientName: s['recipient_name'],
+    message: s['message'],
+    visibility: s['visibility'],
+    giftAmountCents: s['gift_amount_cents'],
+    giftStatus: s['gift_status'],
     values: valuesWithEmoji,
     reactions,
-    createdAt: s.created_at,
+    createdAt: s['created_at'],
   });
 });
 
@@ -356,12 +386,14 @@ shoutoutRouter.get('/public/:id', (req: Request, res: Response): void => {
 // GET /api/rr/shoutouts/:id — single shoutout detail
 // ---------------------------------------------------------------------------
 
-shoutoutRouter.get('/:id', (req: Request, res: Response): void => {
+shoutoutRouter.get('/:id', async (req: Request, res: Response): Promise<void> => {
   const requesterId = req.headers['x-user-id'] as string | undefined;
   const requesterRole = (req.headers['x-user-role'] as string) || 'employee';
-  const db = getDb();
 
-  const s = db.prepare('SELECT * FROM rr_shoutouts WHERE id = ?').get(req.params.id) as any;
+  const s = await sqlGet<Record<string, unknown>>(
+    'SELECT * FROM rr_shoutouts WHERE id = ?',
+    [req.params.id]
+  );
   if (!s) {
     res.status(404).json({ error: 'Shoutout not found' });
     return;
@@ -369,9 +401,9 @@ shoutoutRouter.get('/:id', (req: Request, res: Response): void => {
 
   // Private shoutouts visible only to sender, recipient, or admin
   if (
-    s.visibility === 'private' &&
-    requesterId !== s.sender_id &&
-    requesterId !== s.recipient_id &&
+    s['visibility'] === 'private' &&
+    requesterId !== s['sender_id'] &&
+    requesterId !== s['recipient_id'] &&
     requesterRole !== 'hr_admin'
   ) {
     res.status(403).json({ error: 'Access denied' });
@@ -379,34 +411,35 @@ shoutoutRouter.get('/:id', (req: Request, res: Response): void => {
   }
 
   const canSeeAmount =
-    requesterId === s.recipient_id ||
-    requesterId === s.sender_id ||
+    requesterId === s['recipient_id'] ||
+    requesterId === s['sender_id'] ||
     requesterRole === 'hr_admin';
 
-  const values = db.prepare(
-    'SELECT value_id as id, value_label as label FROM rr_shoutout_values WHERE shoutout_id = ?'
-  ).all(s.id) as Array<{ id: string; label: string }>;
+  const values = await sqlAll<{ id: string; label: string }>(
+    'SELECT value_id as id, value_label as label FROM rr_shoutout_values WHERE shoutout_id = ?',
+    [s['id']]
+  );
 
-  const reactions = db.prepare(`
+  const reactions = await sqlAll<{ emoji: string; count: number }>(`
     SELECT emoji, COUNT(*) as count
     FROM rr_shoutout_reactions WHERE shoutout_id = ?
     GROUP BY emoji ORDER BY count DESC
-  `).all(s.id) as Array<{ emoji: string; count: number }>;
+  `, [s['id']]);
 
   res.json({
-    id: s.id,
-    senderId: s.sender_id,
-    senderName: s.sender_name,
-    recipientId: s.recipient_id,
-    recipientName: s.recipient_name,
-    message: s.message,
-    visibility: s.visibility,
-    source: s.source,
-    giftAmountCents: canSeeAmount ? s.gift_amount_cents : undefined,
-    giftStatus: s.gift_status,
+    id: s['id'],
+    senderId: s['sender_id'],
+    senderName: s['sender_name'],
+    recipientId: s['recipient_id'],
+    recipientName: s['recipient_name'],
+    message: s['message'],
+    visibility: s['visibility'],
+    source: s['source'],
+    giftAmountCents: canSeeAmount ? s['gift_amount_cents'] : undefined,
+    giftStatus: s['gift_status'],
     values,
     reactions,
-    createdAt: s.created_at,
+    createdAt: s['created_at'],
   });
 });
 
@@ -414,7 +447,7 @@ shoutoutRouter.get('/:id', (req: Request, res: Response): void => {
 // DELETE /api/rr/shoutouts/:id — admin soft-delete (RR-025)
 // ---------------------------------------------------------------------------
 
-shoutoutRouter.delete('/:id', (req: Request, res: Response): void => {
+shoutoutRouter.delete('/:id', async (req: Request, res: Response): Promise<void> => {
   const adminId = req.headers['x-user-id'] as string | undefined;
   const role = (req.headers['x-user-role'] as string) || 'employee';
 
@@ -424,11 +457,11 @@ shoutoutRouter.delete('/:id', (req: Request, res: Response): void => {
   }
 
   const { reason } = req.body as { reason?: string };
-  const db = getDb();
 
-  const shoutout = db.prepare(
-    'SELECT id, sender_id, recipient_id, deleted_at FROM rr_shoutouts WHERE id = ?'
-  ).get(req.params.id) as { id: string; sender_id: string; recipient_id: string; deleted_at: string | null } | undefined;
+  const shoutout = await sqlGet<{ id: string; sender_id: string; recipient_id: string; deleted_at: string | null }>(
+    'SELECT id, sender_id, recipient_id, deleted_at FROM rr_shoutouts WHERE id = ?',
+    [req.params.id]
+  );
 
   if (!shoutout) {
     res.status(404).json({ error: 'Shoutout not found' });
@@ -440,13 +473,13 @@ shoutoutRouter.delete('/:id', (req: Request, res: Response): void => {
   }
 
   const now = new Date().toISOString();
-  db.prepare(`
+  await sqlRun(`
     UPDATE rr_shoutouts
     SET deleted_at = ?, deleted_by_admin_id = ?, deleted_reason = ?
     WHERE id = ?
-  `).run(now, adminId ?? 'unknown', reason ?? null, req.params.id);
+  `, [now, adminId ?? 'unknown', reason ?? null, req.params.id]);
 
-  writeAuditLog({
+  await writeAuditLog({
     actorId: adminId ?? 'unknown',
     actorRole: 'hr_admin',
     action: 'shoutout_deleted',
@@ -462,7 +495,7 @@ shoutoutRouter.delete('/:id', (req: Request, res: Response): void => {
 // POST /api/rr/shoutouts/:id/reactions — add / toggle emoji reaction
 // ---------------------------------------------------------------------------
 
-shoutoutRouter.post('/:id/reactions', (req: Request, res: Response): void => {
+shoutoutRouter.post('/:id/reactions', async (req: Request, res: Response): Promise<void> => {
   const reactorId = req.headers['x-user-id'] as string | undefined;
   if (!reactorId) {
     res.status(401).json({ error: 'Missing x-user-id header' });
@@ -475,8 +508,7 @@ shoutoutRouter.post('/:id/reactions', (req: Request, res: Response): void => {
     return;
   }
 
-  const db = getDb();
-  const shoutout = db.prepare('SELECT id FROM rr_shoutouts WHERE id = ?').get(req.params.id);
+  const shoutout = await sqlGet('SELECT id FROM rr_shoutouts WHERE id = ?', [req.params.id]);
   if (!shoutout) {
     res.status(404).json({ error: 'Shoutout not found' });
     return;
@@ -487,30 +519,33 @@ shoutoutRouter.post('/:id/reactions', (req: Request, res: Response): void => {
     ? `${reactor.firstName} ${reactor.lastName}`
     : reactorId;
 
-  const existing = db.prepare(
-    'SELECT id FROM rr_shoutout_reactions WHERE shoutout_id = ? AND reactor_id = ? AND emoji = ?'
-  ).get(req.params.id, reactorId, emoji);
+  const existing = await sqlGet(
+    'SELECT id FROM rr_shoutout_reactions WHERE shoutout_id = ? AND reactor_id = ? AND emoji = ?',
+    [req.params.id, reactorId, emoji]
+  );
 
   let action: 'added' | 'removed';
   if (existing) {
-    db.prepare(
-      'DELETE FROM rr_shoutout_reactions WHERE shoutout_id = ? AND reactor_id = ? AND emoji = ?'
-    ).run(req.params.id, reactorId, emoji);
+    await sqlRun(
+      'DELETE FROM rr_shoutout_reactions WHERE shoutout_id = ? AND reactor_id = ? AND emoji = ?',
+      [req.params.id, reactorId, emoji]
+    );
     action = 'removed';
   } else {
-    db.prepare(`
-      INSERT OR IGNORE INTO rr_shoutout_reactions
+    await sqlRun(`
+      INSERT INTO rr_shoutout_reactions
         (id, shoutout_id, reactor_id, reactor_name, emoji, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(randomUUID(), req.params.id, reactorId, reactorName, emoji, new Date().toISOString());
+      ON CONFLICT DO NOTHING
+    `, [randomUUID(), req.params.id, reactorId, reactorName, emoji, new Date().toISOString()]);
     action = 'added';
   }
 
-  const reactions = db.prepare(`
+  const reactions = await sqlAll<{ emoji: string; count: number }>(`
     SELECT emoji, COUNT(*) as count
     FROM rr_shoutout_reactions WHERE shoutout_id = ?
     GROUP BY emoji ORDER BY count DESC
-  `).all(req.params.id) as Array<{ emoji: string; count: number }>;
+  `, [req.params.id]);
 
   res.json({ reactions, action, emoji });
 });

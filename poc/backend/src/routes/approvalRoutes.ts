@@ -13,7 +13,7 @@
 import { Router, Request, Response } from 'express';
 import { createHash } from 'crypto';
 import { randomUUID } from 'crypto';
-import { getDb } from '../db/schema.js';
+import { sqlGet, sqlRun } from '../db/pg.js';
 import { validateToken, recordDecision, validateIdentifyToken, consumeIdentifyToken, createApprovalToken } from '../services/approvalService.js';
 import { sendApprovalEmail } from '../services/emailService.js';
 import { placeGuustoOrder, pollOrderStatus } from '../services/guustoService.js';
@@ -31,22 +31,21 @@ function sha256hex(input: string): string {
 }
 
 /** Returns the employee full name for a recognition_id, or 'the employee'. */
-function getEmployeeName(recognitionId: string): string {
-  const db = getDb();
-  const row = db
-    .prepare('SELECT employee_first_name, employee_last_name FROM rr_recognitions WHERE id = ?')
-    .get(recognitionId) as Pick<RecognitionRow, 'employee_first_name' | 'employee_last_name'> | undefined;
+async function getEmployeeName(recognitionId: string): Promise<string> {
+  const row = await sqlGet<Pick<RecognitionRow, 'employee_first_name' | 'employee_last_name'>>(
+    'SELECT employee_first_name, employee_last_name FROM rr_recognitions WHERE id = ?',
+    [recognitionId]
+  );
   const first = row?.employee_first_name ?? '';
   const last = row?.employee_last_name ?? '';
   return first ? (last ? `${first} ${last}` : first) : 'the employee';
 }
 
 /** Update reward_status on the recognition row. */
-function updateRewardStatus(recognitionId: string, status: string): void {
-  const db = getDb();
-  db.prepare('UPDATE rr_recognitions SET reward_status = ? WHERE id = ?').run(
-    status,
-    recognitionId
+async function updateRewardStatus(recognitionId: string, status: string): Promise<void> {
+  await sqlRun(
+    'UPDATE rr_recognitions SET reward_status = ? WHERE id = ?',
+    [status, recognitionId]
   );
 }
 
@@ -55,29 +54,28 @@ function updateRewardStatus(recognitionId: string, status: string): void {
  * Logs a warning (does not throw) if Guusto creds are missing — POC graceful degradation.
  */
 function triggerGuustoReward(recognitionId: string): void {
-  const db = getDb();
-  const row = db.prepare(`
-    SELECT r.id, r.employee_id, r.employee_first_name, r.employee_last_name, r.evidence_quote,
-           r.recognition_message, r.reward_amount_cents,
-           c.employee_email, c.manager_email
-    FROM rr_recognitions r
-    LEFT JOIN rr_classifications c ON c.id = r.classification_id
-    WHERE r.id = ?
-  `).get(recognitionId) as {
-    id: string; employee_id: string; employee_first_name: string; employee_last_name: string | null;
-    evidence_quote: string | null; recognition_message: string | null;
-    reward_amount_cents: number; employee_email: string | null; manager_email: string | null;
-  } | undefined;
-
-  if (!row) {
-    console.error(`[triggerGuustoReward] Recognition not found: ${recognitionId}`);
-    return;
-  }
-
-  const employeeEmail = row.employee_email ?? `${row.employee_id}@demo.com`;
-  const managerEmail = process.env.MANAGER_EMAIL ?? row.manager_email ?? 'manager@demo.com';
-
   void (async () => {
+    const row = await sqlGet<{
+      id: string; employee_id: string; employee_first_name: string; employee_last_name: string | null;
+      evidence_quote: string | null; recognition_message: string | null;
+      reward_amount_cents: number; employee_email: string | null; manager_email: string | null;
+    }>(`
+      SELECT r.id, r.employee_id, r.employee_first_name, r.employee_last_name, r.evidence_quote,
+             r.recognition_message, r.reward_amount_cents,
+             c.employee_email, c.manager_email
+      FROM rr_recognitions r
+      LEFT JOIN rr_classifications c ON c.id = r.classification_id
+      WHERE r.id = ?
+    `, [recognitionId]);
+
+    if (!row) {
+      console.error(`[triggerGuustoReward] Recognition not found: ${recognitionId}`);
+      return;
+    }
+
+    const employeeEmail = row.employee_email ?? `${row.employee_id}@demo.com`;
+    const managerEmail = process.env.MANAGER_EMAIL ?? row.manager_email ?? 'manager@demo.com';
+
     try {
       const { requestId } = await placeGuustoOrder({
         recognitionId,
@@ -95,7 +93,7 @@ function triggerGuustoReward(recognitionId: string): void {
         console.warn(`[triggerGuustoReward] Guusto creds not configured — skipping reward delivery for ${recognitionId}`);
       } else {
         console.error(`[triggerGuustoReward] Failed to place Guusto order for ${recognitionId}:`, err);
-        updateRewardStatus(recognitionId, 'reward_failed');
+        await updateRewardStatus(recognitionId, 'reward_failed');
       }
     }
   })();
@@ -191,7 +189,7 @@ function alreadyDecidedPage(priorDecision: string, employeeName: string): string
 // Route: GET /approve
 // ---------------------------------------------------------------------------
 
-approvalRouter.get('/approve', (req: Request, res: Response): void => {
+approvalRouter.get('/approve', async (req: Request, res: Response): Promise<void> => {
   const token = typeof req.query.token === 'string' ? req.query.token : '';
   const isEdit = req.query.edit === '1';
 
@@ -205,18 +203,18 @@ approvalRouter.get('/approve', (req: Request, res: Response): void => {
     console.log('[approvalRoutes] edit=1 flag received — falling back to approve flow');
   }
 
-  const result = validateToken(token);
+  const result = await validateToken(token);
 
   if (!result.valid) {
     if (result.reason === 'already_decided') {
       const priorDecision = result.already_decided ?? 'approved';
       // Get employee name: look up via token hash
-      const db = getDb();
       const tokenHash = sha256hex(token);
-      const approvalRow = db
-        .prepare('SELECT recognition_id FROM rr_approvals WHERE token_hash = ?')
-        .get(tokenHash) as { recognition_id: string } | undefined;
-      const empName = approvalRow ? getEmployeeName(approvalRow.recognition_id) : 'the employee';
+      const approvalRow = await sqlGet<{ recognition_id: string }>(
+        'SELECT recognition_id FROM rr_approvals WHERE token_hash = ?',
+        [tokenHash]
+      );
+      const empName = approvalRow ? await getEmployeeName(approvalRow.recognition_id) : 'the employee';
 
       res.status(409).send(alreadyDecidedPage(priorDecision, empName));
       return;
@@ -229,11 +227,11 @@ approvalRouter.get('/approve', (req: Request, res: Response): void => {
 
   // Valid token — record decision and fire Guusto reward
   const tokenHash = sha256hex(token);
-  recordDecision(tokenHash, 'approved');
-  updateRewardStatus(result.recognition_id, 'approved');
+  await recordDecision(tokenHash, 'approved');
+  await updateRewardStatus(result.recognition_id, 'approved');
   triggerGuustoReward(result.recognition_id); // fire-and-forget
 
-  const employeeName = getEmployeeName(result.recognition_id);
+  const employeeName = await getEmployeeName(result.recognition_id);
   res.status(200).send(approvedPage(employeeName));
 });
 
@@ -241,7 +239,7 @@ approvalRouter.get('/approve', (req: Request, res: Response): void => {
 // Route: GET /dismiss
 // ---------------------------------------------------------------------------
 
-approvalRouter.get('/dismiss', (req: Request, res: Response): void => {
+approvalRouter.get('/dismiss', async (req: Request, res: Response): Promise<void> => {
   const token = typeof req.query.token === 'string' ? req.query.token : '';
 
   if (!token) {
@@ -249,17 +247,17 @@ approvalRouter.get('/dismiss', (req: Request, res: Response): void => {
     return;
   }
 
-  const result = validateToken(token);
+  const result = await validateToken(token);
 
   if (!result.valid) {
     if (result.reason === 'already_decided') {
       const priorDecision = result.already_decided ?? 'dismissed';
-      const db = getDb();
       const tokenHash = sha256hex(token);
-      const approvalRow = db
-        .prepare('SELECT recognition_id FROM rr_approvals WHERE token_hash = ?')
-        .get(tokenHash) as { recognition_id: string } | undefined;
-      const empName = approvalRow ? getEmployeeName(approvalRow.recognition_id) : 'the employee';
+      const approvalRow = await sqlGet<{ recognition_id: string }>(
+        'SELECT recognition_id FROM rr_approvals WHERE token_hash = ?',
+        [tokenHash]
+      );
+      const empName = approvalRow ? await getEmployeeName(approvalRow.recognition_id) : 'the employee';
 
       res.status(409).send(alreadyDecidedPage(priorDecision, empName));
       return;
@@ -270,10 +268,10 @@ approvalRouter.get('/dismiss', (req: Request, res: Response): void => {
   }
 
   const tokenHash = sha256hex(token);
-  recordDecision(tokenHash, 'dismissed');
-  updateRewardStatus(result.recognition_id, 'dismissed');
+  await recordDecision(tokenHash, 'dismissed');
+  await updateRewardStatus(result.recognition_id, 'dismissed');
 
-  const employeeName = getEmployeeName(result.recognition_id);
+  const employeeName = await getEmployeeName(result.recognition_id);
   res.status(200).send(dismissedPage(employeeName));
 });
 
@@ -291,7 +289,7 @@ approvalRouter.get('/identify', async (req: Request, res: Response): Promise<voi
   }
 
   // Validate identify token
-  const idResult = validateIdentifyToken(token);
+  const idResult = await validateIdentifyToken(token);
   if (!idResult.valid) {
     const msg = idResult.reason === 'already_used'
       ? 'You already identified the employee for this recognition. Check your inbox for the approval email.'
@@ -310,10 +308,10 @@ approvalRouter.get('/identify', async (req: Request, res: Response): Promise<voi
   }
 
   // Load the classification
-  const db = getDb();
-  const classification = db
-    .prepare('SELECT * FROM rr_classifications WHERE id = ?')
-    .get(idResult.classification_id) as ClassificationRow | undefined;
+  const classification = await sqlGet<ClassificationRow>(
+    'SELECT * FROM rr_classifications WHERE id = ?',
+    [idResult.classification_id]
+  );
 
   if (!classification) {
     res.status(500).send(pageWrapper('Error — ClearCompany', '<h1 style="font-size:20px;color:#1a1a2e;">Classification not found.</h1>'));
@@ -321,19 +319,19 @@ approvalRouter.get('/identify', async (req: Request, res: Response): Promise<voi
   }
 
   // Consume the identify token (one-shot)
-  consumeIdentifyToken(token);
+  await consumeIdentifyToken(token);
 
   // Create recognition row
   const recognitionId = randomUUID();
   const now = new Date().toISOString();
 
-  db.prepare(`
+  await sqlRun(`
     INSERT INTO rr_recognitions (
       id, classification_id, employee_id, employee_first_name, employee_last_name,
       manager_id, evidence_quote, recognition_message,
       reward_amount_cents, reward_status, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 2500, 'pending', ?)
-  `).run(
+  `, [
     recognitionId,
     classification.id,
     employee.id,
@@ -343,24 +341,26 @@ approvalRouter.get('/identify', async (req: Request, res: Response): Promise<voi
     classification.evidence_quote,
     classification.recognition_draft,
     now
-  );
+  ]);
 
   // Update classification with resolved employee info
-  db.prepare(`
+  await sqlRun(`
     UPDATE rr_classifications
     SET employee_id=?, employee_first_name=?, employee_last_name=?, manager_id=?, manager_email=?,
         manager_first_name=?, employee_email=?, status='resolved'
     WHERE id=?
-  `).run(employee.id, employee.firstName, employee.lastName, employee.managerId, employee.managerEmail,
-         employee.managerFirstName, employee.email, classification.id);
+  `, [employee.id, employee.firstName, employee.lastName, employee.managerId, employee.managerEmail,
+     employee.managerFirstName, employee.email, classification.id]);
 
   // Update the gong_event status
-  db.prepare("UPDATE gong_events SET status='classified' WHERE id=(SELECT gong_event_id FROM rr_classifications WHERE id=?)")
-    .run(classification.id);
+  await sqlRun(
+    "UPDATE gong_events SET status='classified' WHERE id=(SELECT gong_event_id FROM rr_classifications WHERE id=?)",
+    [classification.id]
+  );
 
   // Send the standard approval email
   try {
-    const { token: approvalToken } = createApprovalToken(recognitionId);
+    const { token: approvalToken } = await createApprovalToken(recognitionId);
     const baseUrl = process.env.APP_BASE_URL ?? 'http://localhost:3001';
     const managerEmail = process.env.MANAGER_EMAIL ?? employee.managerEmail;
 
@@ -400,16 +400,15 @@ approvalRouter.get('/identify', async (req: Request, res: Response): Promise<voi
 // GET /api/rr/approve-by-id?recognition_id=<id>&withReward=true|false
 // ---------------------------------------------------------------------------
 
-approvalRouter.get('/approve-by-id', (req: Request, res: Response): void => {
+approvalRouter.get('/approve-by-id', async (req: Request, res: Response): Promise<void> => {
   const { recognition_id, withReward } = req.query as { recognition_id?: string; withReward?: string };
   if (!recognition_id) { res.status(400).json({ error: 'Missing recognition_id' }); return; }
 
-  const db = getDb();
-  const approval = db.prepare(`
+  const approval = await sqlGet<{ id: string }>(`
     SELECT id FROM rr_approvals
     WHERE recognition_id = ? AND decision IS NULL
     LIMIT 1
-  `).get(recognition_id) as { id: string } | undefined;
+  `, [recognition_id]);
 
   if (!approval) {
     res.status(409).json({ error: 'Already decided or not found' });
@@ -417,8 +416,8 @@ approvalRouter.get('/approve-by-id', (req: Request, res: Response): void => {
   }
 
   const now = new Date().toISOString();
-  db.prepare("UPDATE rr_approvals SET decision='approved', decided_at=? WHERE id=?").run(now, approval.id);
-  db.prepare("UPDATE rr_recognitions SET reward_status='approved' WHERE id=?").run(recognition_id);
+  await sqlRun("UPDATE rr_approvals SET decision='approved', decided_at=? WHERE id=?", [now, approval.id]);
+  await sqlRun("UPDATE rr_recognitions SET reward_status='approved' WHERE id=?", [recognition_id]);
 
   const sendReward = withReward !== 'false';
   if (sendReward) {
@@ -429,7 +428,7 @@ approvalRouter.get('/approve-by-id', (req: Request, res: Response): void => {
     ok: true,
     recognitionId: recognition_id,
     rewardTriggered: sendReward,
-    employeeName: getEmployeeName(recognition_id),
+    employeeName: await getEmployeeName(recognition_id),
   });
 });
 
@@ -439,16 +438,15 @@ approvalRouter.get('/approve-by-id', (req: Request, res: Response): void => {
 // GET /api/rr/dismiss-by-id?recognition_id=<id>
 // ---------------------------------------------------------------------------
 
-approvalRouter.get('/dismiss-by-id', (req: Request, res: Response): void => {
+approvalRouter.get('/dismiss-by-id', async (req: Request, res: Response): Promise<void> => {
   const { recognition_id } = req.query as { recognition_id?: string };
   if (!recognition_id) { res.status(400).json({ error: 'Missing recognition_id' }); return; }
 
-  const db = getDb();
-  const approval = db.prepare(`
+  const approval = await sqlGet<{ id: string }>(`
     SELECT id FROM rr_approvals
     WHERE recognition_id = ? AND decision IS NULL
     LIMIT 1
-  `).get(recognition_id) as { id: string } | undefined;
+  `, [recognition_id]);
 
   if (!approval) {
     res.status(409).json({ error: 'Already decided or not found' });
@@ -456,12 +454,12 @@ approvalRouter.get('/dismiss-by-id', (req: Request, res: Response): void => {
   }
 
   const now = new Date().toISOString();
-  db.prepare("UPDATE rr_approvals SET decision='dismissed', decided_at=? WHERE id=?").run(now, approval.id);
-  db.prepare("UPDATE rr_recognitions SET reward_status='dismissed' WHERE id=?").run(recognition_id);
+  await sqlRun("UPDATE rr_approvals SET decision='dismissed', decided_at=? WHERE id=?", [now, approval.id]);
+  await sqlRun("UPDATE rr_recognitions SET reward_status='dismissed' WHERE id=?", [recognition_id]);
 
   res.json({
     ok: true,
     recognitionId: recognition_id,
-    employeeName: getEmployeeName(recognition_id),
+    employeeName: await getEmployeeName(recognition_id),
   });
 });

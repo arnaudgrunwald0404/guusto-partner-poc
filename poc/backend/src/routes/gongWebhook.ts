@@ -16,7 +16,7 @@
 
 import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
-import { getDb } from '../db/schema.js';
+import { sqlGet, sqlRun } from '../db/pg.js';
 import { processGongEvent } from '../jobs/processGongEvent.js';
 import { GongWebhookPayload } from '../types.js';
 
@@ -117,17 +117,14 @@ gongWebhookRouter.post(
       return;
     }
 
-    const db = getDb();
-
     // 3. Idempotency check: same call_id in the last 5 minutes
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    const existing = db
-      .prepare(
-        `SELECT id FROM gong_events
-         WHERE call_id = ? AND received_at > ?
-         LIMIT 1`
-      )
-      .get(payload.callId, fiveMinutesAgo);
+    const existing = await sqlGet(
+      `SELECT id FROM gong_events
+       WHERE call_id = ? AND received_at > ?
+       LIMIT 1`,
+      [payload.callId, fiveMinutesAgo]
+    );
 
     if (existing) {
       // Return 200 — idempotent
@@ -139,10 +136,10 @@ gongWebhookRouter.post(
     const eventId = randomUUID();
     const receivedAt = new Date().toISOString();
 
-    db.prepare(`
+    await sqlRun(`
       INSERT INTO gong_events (id, call_id, received_at, payload, status, call_url, call_title)
       VALUES (?, ?, ?, ?, 'pending', ?, ?)
-    `).run(eventId, payload.callId, receivedAt, rawBody.toString(), payload.callUrl ?? null, payload.callTitle ?? null);
+    `, [eventId, payload.callId, receivedAt, rawBody.toString(), payload.callUrl ?? null, payload.callTitle ?? null]);
 
     // 5. Return 200 immediately (before any async work)
     res.status(200).json({ status: 'ok', eventId });

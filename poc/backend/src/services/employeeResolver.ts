@@ -1,7 +1,7 @@
 /**
  * services/employeeResolver.ts — Maps a name string to a CC employee record.
  *
- * Now backed by the rr_employees SQLite table (seeded from HRM User Report export).
+ * Now backed by the rr_employees Postgres table (seeded from HRM User Report export).
  * Falls back to STUB_EMPLOYEES for the small set of synthetic demo personas used
  * by the frontend persona switcher (Arnaud, Sarah Chen, etc.).
  *
@@ -13,7 +13,7 @@
  */
 
 import { Employee, ResolverResult } from '../types.js';
-import { getDb } from '../db/schema.js';
+import { sqlAll } from '../db/pg.js';
 
 // ---------------------------------------------------------------------------
 // DB row shape
@@ -75,10 +75,9 @@ function rowToEmployee(row: EmployeeRow): FrontlineEmployee {
 // Load all employees from DB + synthetic stubs
 // ---------------------------------------------------------------------------
 
-export function loadDirectory(): FrontlineEmployee[] {
+export async function loadDirectory(): Promise<FrontlineEmployee[]> {
   try {
-    const db = getDb();
-    const rows = db.prepare('SELECT * FROM rr_employees').all() as EmployeeRow[];
+    const rows = await sqlAll<EmployeeRow>('SELECT * FROM rr_employees');
     return [...rows.map(rowToEmployee), ...STUB_EMPLOYEES];
   } catch {
     // DB not yet initialized (e.g. unit tests) — fall back to stubs only
@@ -115,14 +114,15 @@ function isMatch(extractedTokens: string[], employee: Employee): boolean {
  * @param extractedName - The name string from the Claude classifier.
  * @param directory - Employee list (loads from DB when omitted).
  */
-export function resolveEmployee(
+export async function resolveEmployee(
   extractedName: string,
-  directory: Employee[] = loadDirectory()
-): ResolverResult {
+  directory?: Employee[]
+): Promise<ResolverResult> {
+  const dir = directory ?? await loadDirectory();
   const tokens = tokenize(extractedName);
   if (tokens.length === 0) return { result: 'not_found' };
 
-  const matches = directory.filter((emp) => isMatch(tokens, emp));
+  const matches = dir.filter((emp) => isMatch(tokens, emp));
   if (matches.length === 0) return { result: 'not_found' };
   if (matches.length === 1) return { result: 'resolved', employee: matches[0] };
   return { result: 'ambiguous', candidates: matches };

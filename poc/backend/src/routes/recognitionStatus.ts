@@ -14,12 +14,12 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { getDb } from '../db/schema.js';
+import { sqlGet } from '../db/pg.js';
 import { RecognitionRow } from '../types.js';
 
 export const recognitionStatusRouter = Router();
 
-recognitionStatusRouter.get('/', (req: Request, res: Response): void => {
+recognitionStatusRouter.get('/', async (req: Request, res: Response): Promise<void> => {
   const { employee_id } = req.query;
 
   if (!employee_id || typeof employee_id !== 'string') {
@@ -27,20 +27,17 @@ recognitionStatusRouter.get('/', (req: Request, res: Response): void => {
     return;
   }
 
-  const db = getDb();
-
   // Fetch the most recent recognition row for this employee
   // (in a real app you'd scope to a time window or specific recognition ID)
-  const row = db
-    .prepare(
-      `SELECT r.*, c.manager_first_name
-       FROM rr_recognitions r
-       LEFT JOIN rr_classifications c ON r.classification_id = c.id
-       WHERE r.employee_id = ?
-       ORDER BY r.created_at DESC
-       LIMIT 1`
-    )
-    .get(employee_id) as (RecognitionRow & { manager_first_name: string | null }) | undefined;
+  const row = await sqlGet<RecognitionRow & { manager_first_name: string | null }>(
+    `SELECT r.*, c.manager_first_name
+     FROM rr_recognitions r
+     LEFT JOIN rr_classifications c ON r.classification_id = c.id
+     WHERE r.employee_id = ?
+     ORDER BY r.created_at DESC
+     LIMIT 1`,
+    [employee_id]
+  );
 
   if (!row) {
     res.json({ status: null });

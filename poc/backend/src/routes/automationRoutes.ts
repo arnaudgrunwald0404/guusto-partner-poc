@@ -9,7 +9,7 @@
 
 import { Router, Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
-import { getDb } from '../db/schema.js';
+import { sqlAll, sqlGet, sqlRun } from '../db/pg.js';
 import { randomUUID } from 'crypto';
 
 export const automationRouter = Router();
@@ -73,11 +73,10 @@ interface AutomationRuleRow {
 // GET /api/rr/admin/automations
 // ---------------------------------------------------------------------------
 
-automationRouter.get('/', (_req: Request, res: Response): void => {
-  const db = getDb();
-  const rows = db.prepare(
+automationRouter.get('/', async (_req: Request, res: Response): Promise<void> => {
+  const rows = await sqlAll<AutomationRuleRow>(
     'SELECT * FROM rr_automation_rules ORDER BY created_at DESC'
-  ).all() as AutomationRuleRow[];
+  );
 
   const rules = rows.map(r => ({
     id: r.id,
@@ -105,7 +104,7 @@ automationRouter.get('/', (_req: Request, res: Response): void => {
 // POST /api/rr/admin/automations — persist a completed rule
 // ---------------------------------------------------------------------------
 
-automationRouter.post('/', (req: Request, res: Response): void => {
+automationRouter.post('/', async (req: Request, res: Response): Promise<void> => {
   const { spec } = req.body as { spec: AutomationSpec };
 
   if (!spec?.name || !spec.trigger?.type || !spec.businessRules) {
@@ -113,7 +112,6 @@ automationRouter.post('/', (req: Request, res: Response): void => {
     return;
   }
 
-  const db = getDb();
   const id = `auto_${randomUUID().slice(0, 8)}`;
   const now = new Date().toISOString();
 
@@ -125,13 +123,13 @@ automationRouter.post('/', (req: Request, res: Response): void => {
 
   const conditions = JSON.stringify(spec.trigger.conditions ?? []);
 
-  db.prepare(`
+  await sqlRun(`
     INSERT INTO rr_automation_rules
       (id, name, description, trigger_type, trigger_config, conditions,
        require_manager_approval, recognition_enabled, recognition_visibility,
        reward_enabled, reward_amount_cents, frequency_limit, status, created_by, created_at, updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(
+  `, [
     id,
     spec.name,
     spec.description ?? null,
@@ -148,7 +146,7 @@ automationRouter.post('/', (req: Request, res: Response): void => {
     'admin',
     now,
     now,
-  );
+  ]);
 
   res.status(201).json({ id, message: 'Automation created successfully' });
 });
@@ -157,7 +155,7 @@ automationRouter.post('/', (req: Request, res: Response): void => {
 // PATCH /api/rr/admin/automations/:id — toggle status
 // ---------------------------------------------------------------------------
 
-automationRouter.patch('/:id', (req: Request, res: Response): void => {
+automationRouter.patch('/:id', async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params as { id: string };
   const { status } = req.body as { status?: string };
 
@@ -166,15 +164,21 @@ automationRouter.patch('/:id', (req: Request, res: Response): void => {
     return;
   }
 
-  const db = getDb();
-  const result = db.prepare(
-    'UPDATE rr_automation_rules SET status = ?, updated_at = ? WHERE id = ?'
-  ).run(status, new Date().toISOString(), id);
+  // Check existence by fetching the row first
+  const existing = await sqlGet<{ id: string }>(
+    'SELECT id FROM rr_automation_rules WHERE id = ?',
+    [id]
+  );
 
-  if (result.changes === 0) {
+  if (!existing) {
     res.status(404).json({ error: 'Automation not found' });
     return;
   }
+
+  await sqlRun(
+    'UPDATE rr_automation_rules SET status = ?, updated_at = ? WHERE id = ?',
+    [status, new Date().toISOString(), id]
+  );
 
   res.json({ id, status });
 });

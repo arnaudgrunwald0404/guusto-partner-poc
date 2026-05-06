@@ -3,7 +3,7 @@
  *
  * The shoutout is the primary entity in the social recognition layer (Phase 1+).
  * A shoutout can optionally carry a monetary gift; when it does, budget is
- * deducted atomically before the shoutout row is written, and the Guusto
+ * deducted before the shoutout row is written, and the Guusto
  * API call happens asynchronously after the HTTP response is returned.
  *
  * Gift failure handling:
@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { getDb } from '../db/schema.js';
+import { sqlAll, sqlGet, sqlRun } from '../db/pg.js';
 import { deductBudget, rollbackBudget } from './budgetService.js';
 import { placeGuustoOrder, pollOrderStatus } from './guustoService.js';
 import { sendRecognitionNotificationEmail } from './emailService.js';
@@ -55,57 +55,55 @@ export interface AttachGiftParams {
 // ---------------------------------------------------------------------------
 
 /**
- * Writes the shoutout and its value tags atomically.
+ * Writes the shoutout and its value tags.
  * If a gift is requested, deductBudget() is called first — it throws
  * InsufficientBudgetError if the manager doesn't have enough balance,
  * which lets the route handler return a 402 before anything is written.
  *
  * Returns the new shoutout ID.
  */
-export function createShoutout(params: CreateShoutoutParams): string {
-  const db = getDb();
+export async function createShoutout(params: CreateShoutoutParams): Promise<string> {
   const now = new Date().toISOString();
   const shoutoutId = randomUUID();
 
   // Budget deduction must happen before the shoutout is written so that a
   // failed deduction (InsufficientBudgetError) leaves no partial record.
   if (params.giftAmountCents && params.giftAmountCents > 0) {
-    deductBudget(params.senderId, params.giftAmountCents, shoutoutId);
+    await deductBudget(params.senderId, params.giftAmountCents, shoutoutId);
   }
 
-  db.transaction(() => {
-    db.prepare(`
-      INSERT INTO rr_shoutouts (
-        id, sender_id, sender_name, recipient_id, recipient_name, recipient_email,
-        message, visibility, source, gift_amount_cents, gift_status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      shoutoutId,
-      params.senderId,
-      params.senderName,
-      params.recipientId,
-      params.recipientName,
-      params.recipientEmail,
-      params.message,
-      params.visibility,
-      params.source ?? 'direct',
-      params.giftAmountCents ?? null,
-      params.giftAmountCents ? 'pending' : null,
-      now,
-    );
+  await sqlRun(`
+    INSERT INTO rr_shoutouts (
+      id, sender_id, sender_name, recipient_id, recipient_name, recipient_email,
+      message, visibility, source, gift_amount_cents, gift_status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    shoutoutId,
+    params.senderId,
+    params.senderName,
+    params.recipientId,
+    params.recipientName,
+    params.recipientEmail,
+    params.message,
+    params.visibility,
+    params.source ?? 'direct',
+    params.giftAmountCents ?? null,
+    params.giftAmountCents ? 'pending' : null,
+    now,
+  ]);
 
-    for (let i = 0; i < params.valueIds.length; i++) {
-      db.prepare(`
-        INSERT OR IGNORE INTO rr_shoutout_values (shoutout_id, value_id, value_label)
-        VALUES (?, ?, ?)
-      `).run(shoutoutId, params.valueIds[i], params.valueLabels[i]);
-    }
-  })();
+  for (let i = 0; i < params.valueIds.length; i++) {
+    await sqlRun(`
+      INSERT INTO rr_shoutout_values (shoutout_id, value_id, value_label)
+      VALUES (?, ?, ?)
+      ON CONFLICT DO NOTHING
+    `, [shoutoutId, params.valueIds[i], params.valueLabels[i]]);
+  }
 
-  // Audit log for monetary sends — written after the main transaction commits
+  // Audit log for monetary sends — written after the main inserts commit
   // (intentionally outside the transaction per P0-8).
   if (params.giftAmountCents && params.giftAmountCents > 0) {
-    writeAuditLog({
+    await writeAuditLog({
       actorId: params.senderId,
       actorRole: 'manager',
       action: 'gift_initiated',
@@ -173,8 +171,6 @@ export async function notifyShoutoutRecipient(params: {
  * On failure: rolls back budget and marks gift_status='failed'.
  */
 export async function attachGuustoGift(params: AttachGiftParams): Promise<void> {
-  const db = getDb();
-
   try {
     const { requestId } = await placeGuustoOrder({
       recognitionId: params.shoutoutId,   // shoutout_id reused as the order reference
@@ -186,9 +182,10 @@ export async function attachGuustoGift(params: AttachGiftParams): Promise<void> 
       amountCents: params.amountCents,
     });
 
-    db.prepare(
-      "UPDATE rr_shoutouts SET guusto_request_id = ?, gift_status = 'sending' WHERE id = ?"
-    ).run(requestId, params.shoutoutId);
+    await sqlRun(
+      "UPDATE rr_shoutouts SET guusto_request_id = ?, gift_status = 'sending' WHERE id = ?",
+      [requestId, params.shoutoutId]
+    );
 
     // Poll for completion — updates rr_orders; we then mirror into rr_shoutouts
     pollOrderStatus(
@@ -210,10 +207,12 @@ export async function attachGuustoGift(params: AttachGiftParams): Promise<void> 
     if (msg.includes('not set')) {
       // No Guusto credentials in env — simulate delivery so the demo works
       console.warn(`[shoutoutService] No Guusto creds — simulating delivery for ${params.shoutoutId}`);
-      db.prepare("UPDATE rr_shoutouts SET gift_status = 'sent' WHERE id = ?")
-        .run(params.shoutoutId);
+      await sqlRun(
+        "UPDATE rr_shoutouts SET gift_status = 'sent' WHERE id = ?",
+        [params.shoutoutId]
+      );
 
-      writeAuditLog({
+      await writeAuditLog({
         actorId: params.senderId,
         actorRole: 'manager',
         action: 'gift_simulated',
@@ -223,7 +222,7 @@ export async function attachGuustoGift(params: AttachGiftParams): Promise<void> 
       });
     } else {
       console.error('[shoutoutService] Guusto placeOrder failed:', err);
-      failGift(params.shoutoutId, params.senderId, params.amountCents);
+      await failGift(params.shoutoutId, params.senderId, params.amountCents);
     }
   }
 }
@@ -232,21 +231,23 @@ export async function attachGuustoGift(params: AttachGiftParams): Promise<void> 
 // Helpers
 // ---------------------------------------------------------------------------
 
-function syncGiftStatusFromOrder(
+async function syncGiftStatusFromOrder(
   requestId: string,
   shoutoutId: string,
   senderId: string,
   amountCents: number,
-): void {
-  const db = getDb();
-  const order = db.prepare(
-    'SELECT status FROM rr_orders WHERE guusto_request_id = ?'
-  ).get(requestId) as { status: string } | undefined;
+): Promise<void> {
+  const order = await sqlGet<{ status: string }>(
+    'SELECT status FROM rr_orders WHERE guusto_request_id = ?',
+    [requestId]
+  );
 
   if (order?.status === 'COMPLETED') {
-    db.prepare("UPDATE rr_shoutouts SET gift_status = 'sent' WHERE id = ?")
-      .run(shoutoutId);
-    writeAuditLog({
+    await sqlRun(
+      "UPDATE rr_shoutouts SET gift_status = 'sent' WHERE id = ?",
+      [shoutoutId]
+    );
+    await writeAuditLog({
       actorId: senderId,
       actorRole: 'manager',
       action: 'gift_delivered',
@@ -255,16 +256,17 @@ function syncGiftStatusFromOrder(
       details: { guustoRequestId: requestId },
     });
   } else if (order?.status === 'FAILED' || order?.status === 'poll_timeout') {
-    failGift(shoutoutId, senderId, amountCents);
+    await failGift(shoutoutId, senderId, amountCents);
   }
 }
 
-function failGift(shoutoutId: string, senderId: string, amountCents: number): void {
-  const db = getDb();
-  db.prepare("UPDATE rr_shoutouts SET gift_status = 'failed' WHERE id = ?")
-    .run(shoutoutId);
-  rollbackBudget(senderId, amountCents, shoutoutId);
-  writeAuditLog({
+async function failGift(shoutoutId: string, senderId: string, amountCents: number): Promise<void> {
+  await sqlRun(
+    "UPDATE rr_shoutouts SET gift_status = 'failed' WHERE id = ?",
+    [shoutoutId]
+  );
+  await rollbackBudget(senderId, amountCents, shoutoutId);
+  await writeAuditLog({
     actorId: senderId,
     actorRole: 'manager',
     action: 'gift_failed_budget_returned',
@@ -278,20 +280,19 @@ function failGift(shoutoutId: string, senderId: string, amountCents: number): vo
 // Audit log writer (used by multiple modules)
 // ---------------------------------------------------------------------------
 
-export function writeAuditLog(params: {
+export async function writeAuditLog(params: {
   actorId: string;
   actorRole: string;
   action: string;
   entityType: string;
   entityId: string;
   details: Record<string, unknown>;
-}): void {
-  const db = getDb();
-  db.prepare(`
+}): Promise<void> {
+  await sqlRun(`
     INSERT INTO rr_audit_log
       (id, actor_id, actor_role, action, entity_type, entity_id, details, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `, [
     randomUUID(),
     params.actorId,
     params.actorRole,
@@ -300,7 +301,7 @@ export function writeAuditLog(params: {
     params.entityId,
     JSON.stringify(params.details),
     new Date().toISOString(),
-  );
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -332,11 +333,10 @@ export interface EnrichedShoutout {
   createdAt: string;
 }
 
-export function getShoutoutFeed(filters: FeedFilters): {
+export async function getShoutoutFeed(filters: FeedFilters): Promise<{
   items: EnrichedShoutout[];
   total: number;
-} {
-  const db = getDb();
+}> {
   const page = Math.max(1, filters.page ?? 1);
   const limit = Math.min(50, Math.max(1, filters.limit ?? 20));
   const offset = (page - 1) * limit;
@@ -371,43 +371,45 @@ export function getShoutoutFeed(filters: FeedFilters): {
     ? `${where} AND ${deletedFilter}`
     : `WHERE ${deletedFilter}`;
 
-  const rows = db.prepare(`
+  const rows = await sqlAll<Record<string, unknown>>(`
     SELECT s.* FROM rr_shoutouts s ${whereWithDeleted}
     ORDER BY s.created_at DESC
     LIMIT ? OFFSET ?
-  `).all(...queryParams, limit, offset) as any[];
+  `, [...queryParams, limit, offset]);
 
-  const countRow = db.prepare(
-    `SELECT COUNT(*) as n FROM rr_shoutouts s ${whereWithDeleted}`
-  ).get(...queryParams) as { n: number };
+  const countRow = await sqlGet<{ n: number }>(
+    `SELECT COUNT(*) as n FROM rr_shoutouts s ${whereWithDeleted}`,
+    queryParams
+  );
 
-  const items: EnrichedShoutout[] = rows.map(s => {
-    const values = db.prepare(
-      'SELECT value_id as id, value_label as label FROM rr_shoutout_values WHERE shoutout_id = ?'
-    ).all(s.id) as Array<{ id: string; label: string }>;
+  const items: EnrichedShoutout[] = await Promise.all(rows.map(async s => {
+    const values = await sqlAll<{ id: string; label: string }>(
+      'SELECT value_id as id, value_label as label FROM rr_shoutout_values WHERE shoutout_id = ?',
+      [s['id']]
+    );
 
-    const reactions = db.prepare(`
+    const reactions = await sqlAll<{ emoji: string; count: number }>(`
       SELECT emoji, COUNT(*) as count
       FROM rr_shoutout_reactions WHERE shoutout_id = ?
       GROUP BY emoji ORDER BY count DESC
-    `).all(s.id) as Array<{ emoji: string; count: number }>;
+    `, [s['id']]);
 
     return {
-      id: s.id,
-      senderId: s.sender_id,
-      senderName: s.sender_name,
-      recipientId: s.recipient_id,
-      recipientName: s.recipient_name,
-      message: s.message,
-      visibility: s.visibility,
-      source: s.source,
-      giftAmountCents: s.gift_amount_cents,
-      giftStatus: s.gift_status,
+      id: s['id'] as string,
+      senderId: s['sender_id'] as string,
+      senderName: s['sender_name'] as string,
+      recipientId: s['recipient_id'] as string,
+      recipientName: s['recipient_name'] as string,
+      message: s['message'] as string,
+      visibility: s['visibility'] as ShoutoutVisibility,
+      source: s['source'] as ShoutoutSource,
+      giftAmountCents: s['gift_amount_cents'] as number | null,
+      giftStatus: s['gift_status'] as GiftStatus | null,
       values,
       reactions,
-      createdAt: s.created_at,
+      createdAt: s['created_at'] as string,
     };
-  });
+  }));
 
-  return { items, total: countRow.n };
+  return { items, total: countRow?.n ?? 0 };
 }
