@@ -1,52 +1,43 @@
 /**
- * db/pg.ts — Async Postgres client for Netlify/Supabase deployment.
+ * db/pg.ts — Async database layer for Netlify/Supabase deployment.
  *
- * Drop-in async replacement for better-sqlite3's synchronous getDb().
- * Uses the `postgres` npm package (postgres.js) with the Supabase
- * transaction pooler connection string.
+ * Uses the Supabase JS client + a SECURITY DEFINER `pg_query` RPC function
+ * so that all SQL goes over HTTPS (PostgREST) rather than a direct TCP
+ * Postgres connection. This avoids PgBouncer "tenant not found" failures
+ * that occur when Netlify Functions attempt a direct pooler connection.
  *
- * Required env var: DATABASE_URL
- *   Format: postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-REGION.pooler.supabase.com:6543/postgres
- *   Get it from: Supabase dashboard → Settings → Database → Connection string → Transaction pooler
+ * Required env vars:
+ *   SUPABASE_URL              — e.g. https://wlkpwfmarpuzyuomoopn.supabase.co
+ *   SUPABASE_SERVICE_ROLE_KEY — service role JWT from Supabase dashboard
  *
- * Usage:
+ * Usage (identical interface to the old better-sqlite3 wrappers):
  *   import { sqlAll, sqlGet, sqlRun } from '../db/pg.js';
  *
- *   const rows = await sqlAll<MyRow>('SELECT * FROM t WHERE manager_id = ?', [managerId]);
+ *   const rows = await sqlAll<MyRow>('SELECT * FROM t WHERE id = ?', [id]);
  *   const row  = await sqlGet<MyRow>('SELECT * FROM t WHERE id = ?', [id]);
  *   await sqlRun('INSERT INTO t (a, b) VALUES (?, ?)', [a, b]);
  *
- * Note: ? placeholders are automatically converted to $1, $2, ... (Postgres style).
+ * Note: ? placeholders are converted to $1, $2, ... before the query is
+ * sent to the pg_query() Postgres function, which substitutes values with
+ * quote_literal() for safe, type-aware parameter binding.
  */
 
-import postgres from 'postgres';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-let _client: ReturnType<typeof postgres> | null = null;
+let _client: SupabaseClient | null = null;
 
-function getClient(): ReturnType<typeof postgres> {
+function getClient(): SupabaseClient {
   if (!_client) {
-    const rawUrl = process.env['DATABASE_URL'];
-    if (!rawUrl) {
+    const url = process.env['SUPABASE_URL'];
+    const key = process.env['SUPABASE_SERVICE_ROLE_KEY'];
+    if (!url || !key) {
       throw new Error(
-        'DATABASE_URL is not set. ' +
-        'Get it from Supabase dashboard → Settings → Database → Connection string → Transaction pooler'
+        'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set. ' +
+        'Add both to your Netlify environment variables.'
       );
     }
-
-    // Parse credentials separately so that special chars in the password
-    // (e.g. '@' stored as '%40') are correctly decoded by the URL API
-    // before being handed to postgres.js — avoids pooler auth failures.
-    const parsed = new URL(rawUrl);
-    _client = postgres({
-      host: parsed.hostname,
-      port: parseInt(parsed.port, 10) || 5432,
-      database: parsed.pathname.slice(1) || 'postgres',
-      username: decodeURIComponent(parsed.username),
-      password: decodeURIComponent(parsed.password),
-      ssl: 'require',
-      max: 5,
-      idle_timeout: 20,
-      max_lifetime: 60 * 30,
+    _client = createClient(url, key, {
+      auth: { persistSession: false },
     });
   }
   return _client;
@@ -58,13 +49,30 @@ function toPositional(query: string): string {
   return query.replace(/\?/g, () => `$${++i}`);
 }
 
-/** Execute a SELECT and return all matching rows. */
+/**
+ * Execute a SELECT and return all matching rows.
+ * Also accepts INSERT/UPDATE/DELETE (returns [] for DML).
+ */
 export async function sqlAll<T extends object = Record<string, unknown>>(
   query: string,
   params: unknown[] = []
 ): Promise<T[]> {
-  const sql = getClient();
-  return sql.unsafe(toPositional(query), params as never[]) as unknown as T[];
+  const client = getClient();
+  const { data, error } = await client.rpc('pg_query', {
+    query: toPositional(query),
+    params: params.length > 0 ? params : [],
+  });
+
+  if (error) {
+    throw new Error(`DB error: ${error.message} | query: ${query.slice(0, 100)}`);
+  }
+
+  // pg_query returns jsonb — Supabase JS deserialises it to a JS value.
+  // For SELECT it's an array of row objects; for DML it's [].
+  if (Array.isArray(data)) return data as T[];
+  // Supabase may return the jsonb value already parsed as an object/array
+  if (data && typeof data === 'object') return [data] as unknown as T[];
+  return [];
 }
 
 /** Execute a SELECT and return the first row, or undefined if not found. */
@@ -81,15 +89,12 @@ export async function sqlRun(
   query: string,
   params: unknown[] = []
 ): Promise<void> {
-  const sql = getClient();
-  await sql.unsafe(toPositional(query), params as never[]);
+  await sqlAll(query, params);
 }
 
-/** Execute multiple statements in a transaction (sequential awaits). */
+/** Execute multiple statements sequentially (no DB-level transaction for POC). */
 export async function sqlTransaction<T>(
   fn: () => Promise<T>
 ): Promise<T> {
-  // For the POC: runs statements sequentially without explicit DB transaction.
-  // For production, use: sql.begin(async sql => { ... })
   return fn();
 }
