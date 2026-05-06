@@ -16,10 +16,12 @@
   NODE_VERSION = "20"
 
 [functions]
-  directory = "netlify/functions"
+  # Functions live inside poc/backend/ so esbuild finds node_modules there
+  directory = "poc/backend/functions"
   node_bundler = "esbuild"
-  # Include the backend source so esbuild can resolve imports
-  included_files = ["poc/backend/src/**"]
+  # better-sqlite3 is a native module used only in local dev (schema.ts)
+  # — it's not in the serverless import chain but mark external to be safe
+  external_node_modules = ["better-sqlite3"]
 
 # ---------------------------------------------------------------------------
 # Route rules
