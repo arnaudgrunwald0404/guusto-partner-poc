@@ -25,14 +25,29 @@ let _client: ReturnType<typeof postgres> | null = null;
 
 function getClient(): ReturnType<typeof postgres> {
   if (!_client) {
-    const url = process.env['DATABASE_URL'];
-    if (!url) {
+    const rawUrl = process.env['DATABASE_URL'];
+    if (!rawUrl) {
       throw new Error(
         'DATABASE_URL is not set. ' +
         'Get it from Supabase dashboard → Settings → Database → Connection string → Transaction pooler'
       );
     }
-    _client = postgres(url, { ssl: 'require', max: 5 });
+
+    // Parse credentials separately so that special chars in the password
+    // (e.g. '@' stored as '%40') are correctly decoded by the URL API
+    // before being handed to postgres.js — avoids pooler auth failures.
+    const parsed = new URL(rawUrl);
+    _client = postgres({
+      host: parsed.hostname,
+      port: parseInt(parsed.port, 10) || 5432,
+      database: parsed.pathname.slice(1) || 'postgres',
+      username: decodeURIComponent(parsed.username),
+      password: decodeURIComponent(parsed.password),
+      ssl: 'require',
+      max: 5,
+      idle_timeout: 20,
+      max_lifetime: 60 * 30,
+    });
   }
   return _client;
 }
