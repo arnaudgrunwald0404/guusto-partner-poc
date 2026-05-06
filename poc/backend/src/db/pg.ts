@@ -41,10 +41,18 @@ function getHeaders(): Record<string, string> {
   };
 }
 
-/** Convert ? placeholders to $1, $2, ... (Postgres positional params) */
-function toPositional(query: string): string {
+/**
+ * Normalise a SQL query:
+ *   1. Collapse all whitespace (newlines, tabs, multiple spaces) to a single space.
+ *   2. Convert ? placeholders to $1, $2, ... (Postgres positional params).
+ *
+ * Normalisation is required because pg_query's regex-based SELECT detection
+ * fails on multi-line query strings — collapsing to one line fixes this.
+ */
+function normalise(query: string): string {
+  const flat = query.replace(/\s+/g, ' ').trim();
   let i = 0;
-  return query.replace(/\?/g, () => `$${++i}`);
+  return flat.replace(/\?/g, () => `$${++i}`);
 }
 
 /**
@@ -59,7 +67,7 @@ export async function sqlAll<T extends object = Record<string, unknown>>(
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify({
-      query: toPositional(query),
+      query: normalise(query),
       params: params,
     }),
     signal: AbortSignal.timeout(15_000),
