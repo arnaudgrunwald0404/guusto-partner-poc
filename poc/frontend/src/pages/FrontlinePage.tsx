@@ -17,7 +17,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 
-const API = 'http://localhost:3001';
+const API = '';
 const ALLOWED_REACTIONS = ['👏', '⭐', '🙌', '🔥', '❤️', '🚀'];
 
 // ---------------------------------------------------------------------------

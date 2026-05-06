@@ -3,6 +3,10 @@ node_modules/
 *.sqlite-wal
 *.sqlite-shm
 dist/
+# Allow the pre-built frontend dist to be committed (clearco-ui is a local
+# sibling repo not available in Netlify CI, so we commit the built output)
+!poc/frontend/dist/
+!poc/frontend/dist/**
 .env
 .DS_Store
 screenshots/

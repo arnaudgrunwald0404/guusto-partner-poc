@@ -15,7 +15,7 @@ import { RecognizeDrawer } from '../components/RecognizeDrawer/RecognizeDrawer';
 import { GiftRedemptionPanel } from '../components/GiftRedemption/GiftRedemptionPanel';
 import { getEmployee, type EmployeeProfile } from '../data/employees';
 
-const API = 'http://localhost:3001';
+const API = '';
 const VIEWER_HEADERS = { 'x-user-id': 'admin-1', 'x-user-role': 'hr_admin' };
 
 // ---------------------------------------------------------------------------

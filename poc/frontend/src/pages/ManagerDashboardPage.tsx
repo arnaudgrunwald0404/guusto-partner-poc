@@ -19,7 +19,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-const API = 'http://localhost:3001';
+const API = '';
 import {
   PageHeader,
   Card,

@@ -17,7 +17,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 
-const API_BASE = 'http://localhost:3001';
+const API_BASE = '';
 
 type Step = 'idle' | 'placing' | 'polling' | 'ready' | 'embed_test' | 'done';
 

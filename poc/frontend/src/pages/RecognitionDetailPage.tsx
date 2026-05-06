@@ -9,7 +9,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 
-const API = 'http://localhost:3001';
+const API = '';
 const ADMIN_HEADERS = { 'x-user-id': 'admin-1', 'x-user-role': 'hr_admin' };
 const ALLOWED_REACTIONS = ['👏', '⭐', '🙌', '🔥', '❤️', '🚀'];
 

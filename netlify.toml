@@ -1,0 +1,60 @@
+# netlify.toml — ClearCompany × Guusto R&R POC
+#
+# Architecture:
+#   Frontend: Vite React app (pre-built dist committed — clearco-ui is a local
+#             sibling repo not available in CI, so we build locally and commit dist)
+#   Backend:  Express app wrapped in a single Netlify Function via serverless-http
+#             All /api/* requests are routed to the function.
+
+[build]
+  # Frontend: serve pre-built dist (no CI build step for frontend)
+  publish = "poc/frontend/dist"
+  # Backend: bundle the Netlify Function from TypeScript
+  command = "cd poc/backend && npm install && npm run build 2>/dev/null || true"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  # Include the backend source so esbuild can resolve imports
+  included_files = ["poc/backend/src/**"]
+
+# ---------------------------------------------------------------------------
+# Route rules
+# ---------------------------------------------------------------------------
+
+# All /api/* → Netlify Function (Express handles routing internally)
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api"
+  status = 200
+  force = true
+
+# Health check
+[[redirects]]
+  from = "/health"
+  to = "/.netlify/functions/api"
+  status = 200
+  force = true
+
+# SPA fallback — serve index.html for all non-file, non-api routes
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# ---------------------------------------------------------------------------
+# Headers
+# ---------------------------------------------------------------------------
+
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

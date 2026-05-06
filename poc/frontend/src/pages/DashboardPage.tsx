@@ -12,7 +12,7 @@ import { Link } from 'react-router-dom';
 
 const ALLOWED_REACTIONS = ['👏', '⭐', '🙌', '🔥', '❤️', '🚀'];
 
-const API = 'http://localhost:3001';
+const API = '';
 const ADMIN_HEADERS = { 'x-user-id': 'admin-1', 'x-user-role': 'hr_admin' };
 const POLL_MS = 30_000;
 
@@ -479,7 +479,7 @@ export function DashboardPage() {
             }} />
             AI Recognition Pipeline
           </div>
-          <a href="http://localhost:3001/dashboard" target="_blank" rel="noopener noreferrer"
+          <a href="/dashboard" target="_blank" rel="noopener noreferrer"
              style={{ fontSize: 12, color: '#1a56db', textDecoration: 'none', fontWeight: 500 }}>
             Open monitor →
           </a>

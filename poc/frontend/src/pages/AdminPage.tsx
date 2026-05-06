@@ -40,7 +40,7 @@ import {
 // Constants
 // ---------------------------------------------------------------------------
 
-const API = 'http://localhost:3001';
+const API = '';
 const ADMIN_HEADERS = {
   'x-user-id': 'admin',
   'x-user-role': 'hr_admin',

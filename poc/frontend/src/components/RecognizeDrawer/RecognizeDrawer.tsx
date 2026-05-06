@@ -998,7 +998,7 @@ export function RecognizeDrawer({
 
   // Fetch company values on mount
   useEffect(() => {
-    fetch('http://localhost:3001/api/rr/values')
+    fetch('/api/rr/values')
       .then(r => r.json())
       .then((data: { values?: Array<CompanyValue & { is_active?: number }> }) => {
         if (data.values && data.values.length > 0) {
@@ -1046,7 +1046,7 @@ export function RecognizeDrawer({
     setAiDrafting(true);
     setAiDraftError(null);
     try {
-      const res = await fetch('http://localhost:3001/api/rr/ai/draft', {
+      const res = await fetch('/api/rr/ai/draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1072,7 +1072,7 @@ export function RecognizeDrawer({
     setIsSubmitting(true);
     setSubmitError(null);
     try {
-      const res = await fetch('http://localhost:3001/api/rr/shoutouts', {
+      const res = await fetch('/api/rr/shoutouts', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
